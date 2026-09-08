@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fsd_cpp</name>
+  <version>1.0.0</version>
+  <description>C++/CUDA implementation of the FSD stack for the Jetson Orin, with an FSDS (Formula Student Driverless Simulator) adapter. Stereo-camera only. Interfaces per FSD_System_Interface_Specification.md.</description>
+  <maintainer email="183348113+coder-crypt0@users.noreply.github.com">FSD Team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>fsd_msgs</depend>
+  <depend>fs_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>libopencv-dev</depend>
+
+  <exec_depend>ros2launch</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

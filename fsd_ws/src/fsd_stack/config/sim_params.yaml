@@ -1,0 +1,110 @@
+# Parameters for the built-in KINEMATIC SIMULATOR only (sim.launch.py).
+#
+# Separate from params.yaml on purpose. params.yaml is the real car, where
+# every speed is deliberately timid and raised only after three clean runs.
+# Here the vehicle cannot be damaged, so the values are the ones that actually
+# exercise the code: race speed well above exploration speed, obstacles on the
+# line, dynamics limits representative of slicks.
+#
+# The kinematic bicycle model has NO tyre model, so a_lat_max only shapes the
+# velocity profile — it cannot validate grip. That is what FSDS is for.
+
+sim:
+  ros__parameters:
+    noise_pos_m: 0.05
+    fov_range_m: 12.0            # stands in for the stereo detection range
+    fov_half_angle_deg: 60.0
+    # Objects sitting ON the racing line, as a fraction of the lap, revealed
+    # after the first lap is mapped so avoidance is exercised at race speed.
+    obstacle_lap_fractions: [0.45]
+    obstacle_lateral_m: [0.0]
+    obstacle_appear_s: 60.0
+
+state_estimation:
+  ros__parameters:
+    wheel_radius_m: 0.228
+    publish_rate_hz: 50.0
+    use_map_correction: true
+    max_correction_speed_mps: 1.0
+    max_correction_yaw_rate: 0.3
+    correction_reject_m: 2.0
+
+cone_mapping:
+  ros__parameters:
+    search_radius_m: 1.2
+    gate_threshold_m: 0.5
+    n_confirm: 3
+    tentative_timeout_s: 1.5
+    max_spawn_sigma_m: 0.5
+    publish_rate_hz: 10.0
+    localize_enable: true
+    localize_gate_m: 1.0
+    localize_min_inliers: 6
+    localize_min_obs: 5
+    localize_min_landmarks: 12
+    min_lap_distance_m: 20.0
+    start_corridor_m: 6.0
+    laps_to_known: 1
+
+path_planning:
+  ros__parameters:
+    window_ahead_m: 25.0
+    window_behind_m: 5.0
+    edge_min_m: 1.5
+    edge_max_m: 6.0
+    sample_spacing_m: 0.5
+    publish_rate_hz: 10.0
+    default_track_width_m: 3.5
+    chain_smooth_passes: 1
+    chain_smooth_weight: 0.25
+    raceline_enable: true
+    known_window_ahead_m: 60.0
+    known_window_behind_m: 3.0
+    raceline_margin_m: 1.0
+    raceline_iters: 400
+    raceline_step: 0.03
+    raceline_reg: 0.002
+    raceline_min_clearance_m: 0.9
+    global_rebuild_cone_delta: 3
+    global_rebuild_min_period_s: 2.0
+    obstacle_gate_m: 1.1
+    obstacle_clearance_m: 0.9
+    obstacle_min_clearance_m: 0.5
+    obstacle_blend_m: 5.0
+    obstacle_blend_time_s: 0.8
+    obstacle_blend_max_m: 12.0
+    obstacle_edge_margin_m: 0.8
+    obstacle_lookahead_m: 20.0
+    obstacle_confirm_frames: 2
+    obstacle_speed_mps: 3.0
+    blocked_confirm_frames: 3
+    obstacle_ignore_big_orange: true
+    v_explore_mps: 6.0
+    # Same reasoning as fsds_params.yaml: 0.3 s reaction + v^2/(2*a_brake)
+    # must fit inside the 12 m detection range. At a_brake = 8: 11 m/s ->
+    # 3.3 + 7.6 = 10.9 m.
+    v_race_mps: 11.0
+
+motion_control:
+  ros__parameters:
+    wheelbase_m: 1.53
+    max_steering_rad: 0.35
+    v_max_mps: 16.0          # absolute ceiling; the planner caps below this
+    v_no_cap_mps: 5.0
+    speed_limit_timeout_s: 1.0
+    cap_ramp_mps2: 2.0
+    a_lat_max: 8.0           # ~0.8 g, representative of slicks
+    a_brake_max: 8.0
+    a_accel_max: 3.0
+    torque_max_nm: 30.0
+    kp_speed: 12.0
+    ki_speed: 2.0
+    lookahead_gain_s: 0.8
+    lookahead_min_m: 2.0
+    lookahead_max_m: 8.0
+
+safety_supervisor:
+  ros__parameters:
+    required_nodes: [state_estimation, cone_mapping, path_planning,
+                     motion_control]
+    max_steering_rad: 0.35

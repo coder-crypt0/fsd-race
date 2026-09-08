@@ -1,0 +1,129 @@
+# FSD stack parameters — vehicle defaults.
+# PLACEHOLDER values marked !! MUST be measured/calibrated before track use.
+
+cone_detection:
+  ros__parameters:
+    model_path: ''            # set to your .pt / .engine; empty = HSV-only
+    conf_threshold: 0.4
+    min_contour_area_px: 80.0
+    class_to_color: [0, 1, 2, 3]
+
+cone_localization:
+  ros__parameters:
+    fx: 500.0                 # !! from calibration
+    fy: 500.0                 # !!
+    cx: 320.0                 # !!
+    cy: 240.0                 # !!
+    # !! measured stereo baseline. Range error is z^2/(fx*B), so the baseline
+    # sets useful range more than anything else: at fx = 500, a 0.12 m baseline
+    # gives 1.7 m of 1-sigma error at 10 m, a 0.30 m bar gives 0.67 m. Build
+    # the camera bar as wide as the mount allows (0.30 m target) and put the
+    # measured value here.
+    baseline_m: 0.12
+    use_stereo: false         # enable after rectification is validated
+    max_range_m: 12.0
+    # !! camera position rel. rear axle. cam_offset_y is the LEFT camera's own
+    # lateral offset (left positive = half the baseline), not zero — the
+    # projection happens in the left camera frame.
+    cam_offset_x: 1.6
+    cam_offset_y: 0.06
+    cam_offset_z: 0.8
+
+state_estimation:
+  ros__parameters:
+    wheel_radius_m: 0.228     # Hoosier R18 ~18" OD — verify loaded radius
+    publish_rate_hz: 50.0
+    # Fold Block 4's map-relative fix into dead reckoning, rate-limited so the
+    # pose never jumps (1.0 m/s = 0.02 m per 50 Hz tick; the supervisor treats
+    # a >1 m discontinuity as a failure, and it should).
+    use_map_correction: true
+    max_correction_speed_mps: 1.0
+    max_correction_yaw_rate: 0.3
+    correction_reject_m: 2.0
+
+cone_mapping:
+  ros__parameters:
+    search_radius_m: 1.2
+    gate_threshold_m: 0.5
+    n_confirm: 3
+    tentative_timeout_s: 1.5
+    max_spawn_sigma_m: 0.5
+    publish_rate_hz: 10.0
+    localize_enable: true
+    localize_gate_m: 1.0      # must stay well under the cone pitch (~3 m)
+    localize_min_inliers: 6
+    localize_min_obs: 5
+    localize_min_landmarks: 12
+    min_lap_distance_m: 20.0  # !! raise toward the real lap length once known
+    start_corridor_m: 6.0
+    laps_to_known: 1
+
+path_planning:
+  ros__parameters:
+    window_ahead_m: 25.0
+    window_behind_m: 5.0
+    edge_min_m: 1.5
+    edge_max_m: 6.0
+    sample_spacing_m: 0.5
+    publish_rate_hz: 10.0
+    default_track_width_m: 3.5
+    chain_smooth_passes: 1
+    chain_smooth_weight: 0.25
+    raceline_enable: true
+    known_window_ahead_m: 60.0
+    known_window_behind_m: 3.0
+    raceline_margin_m: 1.0    # !! set from measured car width + margin
+    raceline_iters: 400
+    raceline_step: 0.03
+    raceline_reg: 0.002
+    raceline_min_clearance_m: 0.9
+    global_rebuild_cone_delta: 3
+    global_rebuild_min_period_s: 2.0
+    obstacle_gate_m: 1.1      # keep below half the narrowest track width
+    obstacle_clearance_m: 0.9
+    obstacle_min_clearance_m: 0.5
+    obstacle_blend_m: 5.0
+    obstacle_blend_time_s: 0.8
+    obstacle_blend_max_m: 12.0
+    obstacle_edge_margin_m: 0.8
+    obstacle_lookahead_m: 20.0
+    obstacle_confirm_frames: 2
+    obstacle_speed_mps: 3.0
+    blocked_confirm_frames: 3
+    obstacle_ignore_big_orange: true
+    # FIRST VEHICLE TESTS: both regimes stay at walking-to-jogging pace. The
+    # point of shipping the regime split now is that the mechanism is tested,
+    # not that the car is fast. Raise v_race_mps only after three clean runs,
+    # and never past the point where 0.3 s of reaction plus v^2/(2*a_brake)
+    # exceeds the range at which perception reliably reports a cone.
+    v_explore_mps: 3.0
+    v_race_mps: 5.0
+
+motion_control:
+  ros__parameters:
+    wheelbase_m: 1.53         # !! MEASURE THE CAR
+    max_steering_rad: 0.35    # !! from steering geometry
+    v_max_mps: 5.0            # absolute ceiling; raise only after 3 clean runs
+    v_no_cap_mps: 3.0         # used only if /planning/speed_limit goes missing
+    speed_limit_timeout_s: 1.0
+    cap_ramp_mps2: 2.0
+    a_lat_max: 4.0
+    a_brake_max: 5.0
+    a_accel_max: 3.0
+    torque_max_nm: 30.0
+    kp_speed: 12.0
+    ki_speed: 2.0
+    lookahead_gain_s: 0.8
+    lookahead_min_m: 2.0
+    lookahead_max_m: 8.0
+
+safety_supervisor:
+  ros__parameters:
+    required_nodes: [cone_detection, cone_localization, state_estimation,
+                     cone_mapping, path_planning, motion_control]
+    max_steering_rad: 0.35
+
+can_bridge:
+  ros__parameters:
+    channel: can0
+    bitrate: 500000
