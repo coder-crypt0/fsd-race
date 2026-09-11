@@ -71,7 +71,7 @@ cases. They do not yet cover the complete ROS planner or controller lifecycle.
    path behavior before increasing the configured speed ceiling.
 3. Evaluate cone-trained neural detectors on captured FSDS frames; verify class
    mappings, preprocessing, inference latency, and model licensing.
-4. Benchmark the complete stack on the target Jetson and validate repeated laps.
+4. Benchmark the complete stack on the target Jetson and validate repeated laps. 
 
 The simulator, ROS dependencies, and any future model weights remain separate
 projects with their own licenses. Historical design documents describe intended
