@@ -73,7 +73,10 @@ state_estimation:
   ros__parameters:
     wheel_radius_m: 0.228
     publish_rate_hz: 50.0
-    use_map_correction: true
+    # FSDS rear drive wheels spin under acceleration and are a poor odometer.
+    use_front_wheels: true
+    use_imu_orientation: true
+    use_map_correction: false
     max_correction_speed_mps: 1.0    # 0.02 m per 50 Hz tick: no pose jumps
     max_correction_yaw_rate: 0.3
     correction_reject_m: 2.0
@@ -94,7 +97,7 @@ cone_mapping:
     gate_sigma_scale: 3.0
     gate_max_m: 1.5
     publish_rate_hz: 10.0
-    localize_enable: true
+    localize_enable: false
     localize_gate_m: 1.0             # < half the 3 m cone pitch
     localize_min_inliers: 6
     localize_min_obs: 5

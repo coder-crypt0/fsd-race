@@ -43,6 +43,7 @@
 #include <fsd_msgs/msg/cone3_d_array.hpp>
 #include <fsd_msgs/msg/cone_map.hpp>
 #include <fsd_msgs/msg/cone_map_entry.hpp>
+#include <fsd_msgs/msg/cone_detection2_d.hpp>
 #include <fsd_msgs/msg/pose_correction.hpp>
 #include <fsd_msgs/msg/track_status.hpp>
 
@@ -631,7 +632,10 @@ private:
       e.color = lm.best_color();
       e.x = static_cast<float>(lm.x);
       e.y = static_cast<float>(lm.y);
-      e.side = lm.best_side();
+      e.side = e.color == fsd_msgs::msg::ConeDetection2D::COLOR_BLUE
+        ? ConeMapEntry::SIDE_LEFT
+        : e.color == fsd_msgs::msg::ConeDetection2D::COLOR_YELLOW
+          ? ConeMapEntry::SIDE_RIGHT : lm.best_side();
       e.observation_count = static_cast<uint16_t>(std::min<uint32_t>(lm.obs_count, 65535));
       msg.cones.push_back(e);
     }

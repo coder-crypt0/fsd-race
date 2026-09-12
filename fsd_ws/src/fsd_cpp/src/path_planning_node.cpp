@@ -672,6 +672,7 @@ public:
           m->pose.pose.position.x, m->pose.pose.position.y,
           fsd::yaw_from_quaternion(m->pose.pose.orientation)};
         speed_ = std::abs(m->twist.twist.linear.x);
+        poses_.add(fsd::stamp_to_sec(m->header.stamp), pose_->x, pose_->y, pose_->yaw);
       });
     status_sub_ = create_subscription<TrackStatus>(
       "/mapping/status", fsd::qos_reliable(5),
@@ -719,15 +720,22 @@ private:
     if (!pose_) {
       return;
     }
-    const double cy = std::cos(pose_->yaw), sy = std::sin(pose_->yaw);
+    const auto observation_pose = poses_.query(fsd::stamp_to_sec(msg->header.stamp));
+    if (!observation_pose) {
+      return;
+    }
+    const auto & p = *observation_pose;
+    const double cy = std::cos(p.yaw), sy = std::sin(p.yaw);
     for (const auto & c : msg->cones) {
       const bool track = c.color == ConeDetection2D::COLOR_BLUE ||
                          c.color == ConeDetection2D::COLOR_YELLOW;
-      if (!track || c.x <= 0.25 || c.depth_sigma > local_max_sigma_) {
+      if (!track || !std::isfinite(c.x) || !std::isfinite(c.y) ||
+          !std::isfinite(c.depth_sigma) || c.depth_sigma < 0.0 ||
+          c.x <= 0.25 || c.depth_sigma > local_max_sigma_) {
         continue;
       }
-      const double wx = pose_->x + cy * c.x - sy * c.y;
-      const double wy = pose_->y + sy * c.x + cy * c.y;
+      const double wx = p.x + cy * c.x - sy * c.y;
+      const double wy = p.y + sy * c.x + cy * c.y;
       LocalCone * match = nullptr;
       double best = local_cache_merge_;
       for (auto & old : local_cache_) {
@@ -799,33 +807,15 @@ private:
       publish_cap();
       return;
     }
-    // ERROR latches the EBS, so it is reserved for losing a path the car is
-    // relying on RIGHT NOW — i.e. while moving. A stationary car without a
-    // path is a waiting state, not an emergency, and it is the normal state at
-    // the start line: FSDS parks the car among the big orange start markers
-    // with the first blue/yellow gate still out of pairing range, so the
-    // planner legitimately flickers in and out of validity until the car
-    // creeps far enough forward to see both edges. Latching the EBS there
-    // ends the run before it begins. The supervisor's moving-blind check
-    // still covers the dangerous case.
-    if (last_valid_t_ < 0.0 || speed_ < stationary_speed_) {
-      hb_->set_status(Heartbeat::STATUS_DEGRADED,
-                      last_valid_t_ < 0.0 ? "waiting for first valid path"
-                                          : "no path yet, below committed speed");
-      PathPointArray empty;
-      empty.header.stamp = now();
-      empty.header.frame_id = "odom";
-      pub_->publish(empty);
-    } else if (t - last_valid_t_ <= path_error_timeout_) {
-      hb_->set_status(Heartbeat::STATUS_DEGRADED, "no fresh path, holding last valid");
-      pub_->publish(last_valid_);
-    } else {
-      hb_->set_status(Heartbeat::STATUS_ERROR, "no valid path for > 1 s");
-      PathPointArray empty;
-      empty.header.stamp = now();
-      empty.header.frame_id = "odom";
-      pub_->publish(empty);
-    }
+    // Explicitly request a controlled stop. A live planner with insufficient
+    // geometry may recover automatically; a dead publisher still trips the
+    // controller and supervisor watchdogs. Never refresh an old path as valid.
+    cap_ = {0.0, SpeedLimit::REASON_BLOCKED, "waiting for a visible track corridor"};
+    hb_->set_status(Heartbeat::STATUS_DEGRADED, cap_.detail);
+    PathPointArray empty;
+    empty.header.stamp = now();
+    empty.header.frame_id = "odom";
+    pub_->publish(empty);
     publish_cap();
   }
 
@@ -876,7 +866,8 @@ private:
     }
     // Keep current-frame geometry coherent. Only use the persistent map when
     // the current frame cannot form a local corridor; never merge both sets.
-    if (static_cast<int>(boundary.size()) < local_min_cones_ && map_) {
+    if (mode_ == TrackStatus::MODE_KNOWN &&
+        static_cast<int>(boundary.size()) < local_min_cones_ && map_) {
       boundary.clear();
       for (const auto & c : map_->cones) {
         if (!obstacle_ids_.count(c.id) && c.observation_count >= min_obs_) {
@@ -1070,18 +1061,10 @@ private:
         widths.push_back(bd);
       }
     } else if (left.size() >= 2 || right.size() >= 2) {
-      // Only one edge visible. Which way to offset is decided by where that
-      // edge actually IS relative to the car, not by its colour: a single
-      // misclassified cone would otherwise push the car off the track in the
-      // wrong direction, and colour is the least reliable thing we measure.
+      // Blue is the left boundary, yellow the right, even if the vehicle has
+      // drifted across an edge. Using observed lateral sign reverses recovery.
       const auto & only = left.size() >= 2 ? left : right;
-      double mean_lat = 0.0;
-      for (const auto & p : only) {
-        const double dx = p.x - pose_->x, dy = p.y - pose_->y;
-        mean_lat += -dx * sin_y + dy * cos_y;
-      }
-      mean_lat /= static_cast<double>(only.size());
-      offset_from(only, mean_lat >= 0.0 ? +1.0 : -1.0);
+      offset_from(only, left.size() >= 2 ? +1.0 : -1.0);
     } else {
       fail_ = "no boundary: " + std::to_string(blue.size()) + " blue, " +
               std::to_string(yellow.size()) + " yellow in window";
@@ -1676,6 +1659,7 @@ private:
   fsd_msgs::msg::Cone3DArray::ConstSharedPtr local_cones_;
   std::vector<LocalCone> local_cache_;
   std::optional<fsd::Pose2D> pose_;
+  fsd::PoseBuffer poses_;
   double speed_{0.0};
   uint8_t mode_{TrackStatus::MODE_EXPLORE};
   PathPointArray last_valid_;

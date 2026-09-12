@@ -52,8 +52,6 @@ public:
     declare_parameter<double>("lookahead_gain_s", 0.8);
     declare_parameter<double>("lookahead_min_m", 2.0);
     declare_parameter<double>("lookahead_max_m", 8.0);
-    declare_parameter<double>("creep_speed_mps", 1.5);
-    declare_parameter<double>("creep_timeout_s", 15.0);
     // Used only when no fresh /planning/speed_limit exists (older planner, bag
     // replay, planner restart): the timid v1 speed, never the race one.
     declare_parameter<double>("v_no_cap_mps", 5.0);
@@ -72,8 +70,6 @@ public:
     kv_ = get_parameter("lookahead_gain_s").as_double();
     ld_min_ = get_parameter("lookahead_min_m").as_double();
     ld_max_ = get_parameter("lookahead_max_m").as_double();
-    creep_speed_ = get_parameter("creep_speed_mps").as_double();
-    creep_timeout_ = get_parameter("creep_timeout_s").as_double();
     v_no_cap_ = get_parameter("v_no_cap_mps").as_double();
     cap_timeout_ = get_parameter("speed_limit_timeout_s").as_double();
     cap_ramp_ = get_parameter("cap_ramp_mps2").as_double();
@@ -115,15 +111,21 @@ private:
 
   void on_path(fsd_msgs::msg::PathPointArray::ConstSharedPtr msg)
   {
-    if (msg->points.size() < 2) {
-      return;  // empty = planner ERROR; staleness policy reacts
+    path_rx_t_ = now().seconds();
+    path_available_ = msg->points.size() >= 2 && msg->header.frame_id == "odom";
+    for (const auto & p : msg->points) {
+      path_available_ = path_available_ && std::isfinite(p.x) &&
+        std::isfinite(p.y) && std::isfinite(p.curvature);
+    }
+    if (!path_available_) {
+      return;
     }
     path_.clear();
     for (const auto & p : msg->points) {
       path_.push_back({p.x, p.y, p.curvature});
     }
     v_profile_ = velocity_profile();
-    path_t_ = now().seconds();
+    path_t_ = fsd::stamp_to_sec(msg->header.stamp);
     decayed_vmax_ = v_max_;
     last_near_ = -1;   // new path: next tick does one full scan
   }
@@ -199,47 +201,25 @@ private:
     const double odom_age = t - odom_t_;
     const double path_age = t - path_t_;
 
-    // Creep-start: once the GO signal is received (AS_DRIVING) but no track
-    // has been mapped into a path yet, crawl straight forward so the camera
-    // approaches the first cones and the map can bootstrap. The safety
-    // supervisor still EBSes if the car moves > 3 s with ZERO mapped cones,
-    // so a blind runaway is bounded. Steering held at zero.
-    if (path_.empty()) {
-      if (creep_start_t_ < 0.0 && as_driving_) {
-        creep_start_t_ = t;                       // begin creep window
-      }
-      const bool within_cap = creep_start_t_ >= 0.0 &&
-                              (t - creep_start_t_) < creep_timeout_;
-      if (as_driving_ && odom_age <= 0.2 && within_cap) {
-        const double v = odom_->twist.twist.linear.x;
-        const double err = creep_speed_ - v;
-        cmd.torque_request = static_cast<float>(
-          std::clamp(kp_ * err, 0.0, tq_max_ * 0.5));  // gentle
-        cmd.steering_angle = 0.0f;
-        hb_->set_status(Heartbeat::STATUS_DEGRADED, "creep-start: seeking track");
-      } else if (as_driving_ && !within_cap) {
-        cmd.brake_cmd = 0.3f;                      // give up, stop
-        hb_->set_status(Heartbeat::STATUS_ERROR, "creep timeout, no track found");
-      } else {
-        hb_->set_status(Heartbeat::STATUS_OK, "waiting for GO / path");
-      }
-      pub_->publish(cmd);
-      return;
-    }
-    creep_start_t_ = -1.0;   // a path exists: reset the creep window
-    if (path_age > 2.0 || odom_age > 0.2) {
+    if (odom_age > 0.2 || (path_rx_t_ >= 0.0 && t - path_rx_t_ > 2.0)) {
       cmd.emergency_stop = true;
       cmd.brake_cmd = 1.0f;
-      hb_->set_status(Heartbeat::STATUS_ERROR, "stale inputs");
+      hb_->set_status(Heartbeat::STATUS_ERROR,
+        odom_age > 0.2 ? "odometry publisher stale" : "path publisher stale");
       pub_->publish(cmd);
       return;
     }
+    if (!path_available_ || path_age > 0.5 || path_age < -0.1) {
+      integ_ = 0.0;
+      cmd.brake_cmd = 0.5f;
+      hb_->set_status(Heartbeat::STATUS_DEGRADED, "braking: waiting for fresh corridor");
+      pub_->publish(cmd);
+      return;
+    }
+
     const double allowed = speed_ceiling(t, 1.0 / 50.0);
     const bool holding = cap_fresh_ && cap_v_ <= 0.0;
-    if (path_age > 0.5) {
-      decayed_vmax_ = std::max(0.0, decayed_vmax_ - 2.0 / 50.0);
-      hb_->set_status(Heartbeat::STATUS_DEGRADED, "path stale, decaying speed");
-    } else if (holding) {
+    if (holding) {
       hb_->set_status(Heartbeat::STATUS_DEGRADED,
                       cap_detail_.empty() ? "held at zero by the planner"
                                           : cap_detail_);
@@ -275,12 +255,30 @@ private:
     const double ty = -dx * std::sin(pyaw) + dy * std::cos(pyaw);
     const double alpha = std::atan2(ty, std::max(tx, 1e-6));
     const double ld_act = std::max(std::hypot(tx, ty), 1e-3);
+    if (tx <= 0.1) {
+      cmd.brake_cmd = 0.5f;
+      integ_ = 0.0;
+      hb_->set_status(Heartbeat::STATUS_DEGRADED, "path endpoint is behind vehicle");
+      pub_->publish(cmd);
+      return;
+    }
     const double steer = std::atan2(2.0 * L_ * std::sin(alpha), ld_act);
     cmd.steering_angle = static_cast<float>(std::clamp(steer, -steer_max_, steer_max_));
 
     // ---- Longitudinal PI
     const size_t i_v = std::min(i_near + 2, v_profile_.size() - 1);
     double v_target = std::min({v_profile_[i_v], decayed_vmax_, allowed});
+    // Stop within the remaining observed path, allowing 0.3 s for latency and
+    // 1 m beyond the reference point. The terminal point is not open road.
+    double remaining = 0.0;
+    for (size_t i = i_near; i + 1 < path_.size(); ++i) {
+      remaining += std::hypot(path_[i + 1].x - path_[i].x,
+                              path_[i + 1].y - path_[i].y);
+    }
+    const double reaction = a_brk_ * 0.3;
+    const double horizon_speed = std::sqrt(reaction * reaction +
+      2.0 * a_brk_ * std::max(0.0, remaining - 1.0)) - reaction;
+    v_target = std::min(v_target, horizon_speed);
     if (!as_driving_) {
       v_target = 0.0;
     }
@@ -320,10 +318,11 @@ private:
   }
 
   double L_, steer_max_, v_max_, a_lat_, a_brk_, a_acc_, tq_max_;
-  double kp_, ki_, kv_, ld_min_, ld_max_, creep_speed_, creep_timeout_;
+  double kp_, ki_, kv_, ld_min_, ld_max_;
   double integ_{0.0}, decayed_vmax_;
-  double creep_start_t_{-1.0};
   double path_t_{-1.0}, odom_t_{-1.0};
+  double path_rx_t_{-1.0};
+  bool path_available_{false};
   double v_no_cap_{5.0}, cap_timeout_{1.0}, cap_ramp_{2.0};
   double cap_v_{0.0}, cap_t_{-1.0}, allowed_{0.0};
   bool cap_fresh_{false};

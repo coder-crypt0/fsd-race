@@ -33,11 +33,15 @@ public:
   {
     declare_parameter<double>("wheel_radius_m", 0.228);
     declare_parameter<double>("publish_rate_hz", 50.0);
+    declare_parameter<bool>("use_imu_orientation", false);
+    declare_parameter<bool>("use_front_wheels", false);
     declare_parameter<bool>("use_map_correction", true);
     declare_parameter<double>("max_correction_speed_mps", 1.0);
     declare_parameter<double>("max_correction_yaw_rate", 0.3);
     declare_parameter<double>("correction_reject_m", 2.0);
     r_ = get_parameter("wheel_radius_m").as_double();
+    use_imu_orientation_ = get_parameter("use_imu_orientation").as_bool();
+    use_front_wheels_ = get_parameter("use_front_wheels").as_bool();
     use_corr_ = get_parameter("use_map_correction").as_bool();
     corr_v_ = get_parameter("max_correction_speed_mps").as_double();
     corr_w_ = get_parameter("max_correction_yaw_rate").as_double();
@@ -46,14 +50,30 @@ public:
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       "/imu/data", fsd::qos_reliable(10),
       [this](sensor_msgs::msg::Imu::ConstSharedPtr m) {
+        if (!std::isfinite(m->angular_velocity.z)) { return; }
         wz_ = m->angular_velocity.z;
         have_imu_ = true;
+        imu_rx_t_ = now().seconds();
+        if (use_imu_orientation_ && m->orientation_covariance[0] >= 0.0) {
+          const auto & q = m->orientation;
+          const double norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+          if (std::isfinite(norm) && std::abs(norm - 1.0) < 0.05) {
+            const double heading = fsd::yaw_from_quaternion(q);
+            if (!initial_imu_yaw_) { initial_imu_yaw_ = heading; }
+            yaw_ = fsd::wrap_angle(heading - *initial_imu_yaw_);
+            orientation_rx_t_ = imu_rx_t_;
+          }
+        }
       });
     wheels_sub_ = create_subscription<fsd_msgs::msg::WheelSpeeds>(
       "/wheel_speeds", fsd::qos_reliable(10),
       [this](fsd_msgs::msg::WheelSpeeds::ConstSharedPtr m) {
-        v_ = 0.5 * (m->rl + m->rr) * r_;
+        const double velocity = use_front_wheels_ ? 0.5 * (m->fl + m->fr) * r_
+                                                  : 0.5 * (m->rl + m->rr) * r_;
+        if (!std::isfinite(velocity)) { return; }
+        v_ = velocity;
         have_wheels_ = true;
+        wheels_rx_t_ = now().seconds();
       });
     corr_sub_ = create_subscription<PoseCorrection>(
       "/localization/correction", fsd::qos_reliable(10),
@@ -115,8 +135,15 @@ private:
     if (dt <= 0.0 || dt > 0.5 || !have_imu_ || !have_wheels_) {
       return;
     }
+    if (t - imu_rx_t_ > 0.3 || t - wheels_rx_t_ > 0.3) {
+      hb_->set_status(fsd_msgs::msg::Heartbeat::STATUS_ERROR, "IMU or wheel data stale");
+      return;
+    }
+    hb_->set_status(fsd_msgs::msg::Heartbeat::STATUS_OK);
 
-    yaw_ = fsd::wrap_angle(yaw_ + wz_ * dt);
+    if (!use_imu_orientation_ || t - orientation_rx_t_ > 0.1) {
+      yaw_ = fsd::wrap_angle(yaw_ + wz_ * dt);
+    }
     x_ += v_ * std::cos(yaw_) * dt;
     y_ += v_ * std::sin(yaw_) * dt;
     dist_ += std::abs(v_) * dt;
@@ -154,6 +181,9 @@ private:
 
   double r_, corr_v_, corr_w_, corr_reject_;
   bool use_corr_{true};
+  bool use_imu_orientation_{false}, use_front_wheels_{false};
+  std::optional<double> initial_imu_yaw_;
+  double imu_rx_t_{-1.0}, wheels_rx_t_{-1.0}, orientation_rx_t_{-1.0};
   double x_{0.0}, y_{0.0}, yaw_{0.0}, v_{0.0}, wz_{0.0}, dist_{0.0};
   double dist_since_fix_{0.0};
   double pend_x_{0.0}, pend_y_{0.0}, pend_yaw_{0.0};
