@@ -87,7 +87,7 @@ public:
       "/wheel_states", fsd::qos_best_effort(5),
       [this](fs_msgs::msg::WheelStates::ConstSharedPtr m) {
         fsd_msgs::msg::WheelSpeeds w;
-        w.header.stamp = now();
+        w.header.stamp = m->header.stamp;
         w.fl = static_cast<float>(m->fl_rpm * kRpmToRadPerSec);
         w.fr = static_cast<float>(m->fr_rpm * kRpmToRadPerSec);
         w.rl = static_cast<float>(m->rl_rpm * kRpmToRadPerSec);
