@@ -65,7 +65,7 @@ stereo_cone:
     mask_close_px: 7           # bridge the white stripe; see stereo_cone_node
     min_aspect: 0.7            # a cone is taller than wide; reject stripe bands
     max_aspect: 3.5
-    horizon_row_px: 80         # measured FSDS horizon; gate bbox bottom, not top
+    horizon_row_px: 160        # level camera above ground: cy; gate bbox bottom
     max_disparity_px: 128
     patch_half_px: 7
 

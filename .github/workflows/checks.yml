@@ -1,0 +1,13 @@
+name: Source checks
+on: [push, pull_request]
+jobs:
+  algorithms:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Standalone C++ algorithm tests
+        run: bash fsd_ws/src/fsd_cpp/test/run_tests.sh
+      - name: Python and Bash syntax
+        run: |
+          python3 -m compileall -q fsd_ws/src/fsd_stack fsd_ws/tools
+          bash -n fsd_ws/tools/run_fsds_demo.sh

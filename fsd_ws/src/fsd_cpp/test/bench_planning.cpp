@@ -8,6 +8,7 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+#include <optional>
 #include "algo_extract.hpp"
 using Clock = std::chrono::steady_clock;
 int main(){
