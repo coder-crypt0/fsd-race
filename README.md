@@ -74,7 +74,9 @@ cd fsd_ws
 python3 tools/test_runtime.py
 ```
 
-It uses ROS domain 91 and does not require FSDS. See the
+Build and source the workspace first (`colcon build --symlink-install` followed
+by `source install/setup.bash`); the check launches the installed C++ node
+binaries. It uses ROS domain 91 and does not require FSDS. See the
 [validation record](docs/validation.md) for its exact coverage and current
 end-to-end limitations.
 
