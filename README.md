@@ -63,6 +63,21 @@ bash fsd_ws/src/fsd_cpp/test/run_tests.sh
 These tests extract algorithm helpers from runtime sources and execute synthetic
 cases. They do not yet cover the complete ROS planner or controller lifecycle.
 
+## Runtime regression check
+
+After building the workspace in the ROS environment, run the isolated runtime
+regression suite to exercise the compiled C++ nodes' recovery, controlled-stop,
+planner-watchdog, and odometry behavior:
+
+```bash
+cd fsd_ws
+python3 tools/test_runtime.py
+```
+
+It uses ROS domain 91 and does not require FSDS. See the
+[validation record](docs/validation.md) for its exact coverage and current
+end-to-end limitations.
+
 ## Current engineering priorities
 
 1. Record camera frames, detections, planned paths, and simulator reference pose
