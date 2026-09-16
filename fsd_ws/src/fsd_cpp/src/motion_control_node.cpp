@@ -74,7 +74,9 @@ public:
     cap_timeout_ = get_parameter("speed_limit_timeout_s").as_double();
     cap_ramp_ = get_parameter("cap_ramp_mps2").as_double();
     decayed_vmax_ = v_max_;
-    allowed_ = std::min(v_max_, v_no_cap_);
+    // Start the acceleration ramp at rest. Initializing to the fallback cap
+    // bypassed the ramp and requested full torque on the first valid path.
+    allowed_ = 0.0;
 
     path_sub_ = create_subscription<fsd_msgs::msg::PathPointArray>(
       "/planning/path", fsd::qos_reliable(5),
@@ -211,6 +213,7 @@ private:
     }
     if (!path_available_ || path_age > 0.5 || path_age < -0.1) {
       integ_ = 0.0;
+      allowed_ = std::min(allowed_, std::max(0.0, odom_->twist.twist.linear.x));
       cmd.brake_cmd = 0.5f;
       hb_->set_status(Heartbeat::STATUS_DEGRADED, "braking: waiting for fresh corridor");
       pub_->publish(cmd);
@@ -258,6 +261,7 @@ private:
     if (tx <= 0.1) {
       cmd.brake_cmd = 0.5f;
       integ_ = 0.0;
+      allowed_ = std::min(allowed_, std::max(0.0, v));
       hb_->set_status(Heartbeat::STATUS_DEGRADED, "path endpoint is behind vehicle");
       pub_->publish(cmd);
       return;
@@ -281,6 +285,8 @@ private:
     v_target = std::min(v_target, horizon_speed);
     if (!as_driving_) {
       v_target = 0.0;
+      allowed_ = 0.0;
+      integ_ = 0.0;
     }
     const double err = v_target - v;
     if (holding && v < 0.3) {

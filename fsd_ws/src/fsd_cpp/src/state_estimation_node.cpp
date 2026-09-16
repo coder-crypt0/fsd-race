@@ -1,7 +1,7 @@
 // BLOCK 3 — STATE ESTIMATION (C++). Port of the Python reference node.
 // /imu/data + /wheel_speeds (+ /localization/correction, optional)
 //     -> /odometry/filtered (50 Hz dead reckoning with honest covariance
-//        growth; IMU yaw RATE only, never absolute yaw).
+//        growth; gyro integration or explicitly enabled IMU orientation).
 //
 // Dead reckoning alone is metres out after a lap, which is fatal once the
 // planner works off a whole-lap map. Block 4 measures the offset between what

@@ -7,11 +7,13 @@ yet been measured on that device.
 
 ## Development status
 
-This is an experimental simulator project. Reliable collision-free lap completion
-and race-speed operation have **not** been demonstrated. Existing tests validate
-individual algorithms; they do not establish end-to-end driving reliability.
+This is an experimental simulator project. Two fresh-spawn FSDS TrainingMap runs
+completed laps in 151.36 and 157.34 seconds with zero referee cone hits on
+16 September 2026. Repeatability testing is in progress; race-speed operation and other tracks are
+not validated. See the [validation record](docs/validation.md) for measured limits.
 The current default uses one forward camera with HSV cone detection and
-known-height monocular ranging. No trained YOLO model is bundled or enabled.
+calibrated flat-ground monocular ranging in FSDS. No trained YOLO model is bundled
+or enabled. Real-camera height, pitch and intrinsics require separate calibration.
 
 ## Architecture
 
@@ -45,12 +47,16 @@ From PowerShell in this directory:
 ```powershell
 .\run.ps1          # synchronize, build, launch
 .\run-nobuild.ps1  # synchronize configuration and launch existing binaries
+.\run-nobuild.ps1 -EvaluationSeconds 190  # record a bounded run and stop cleanly
 ```
 
 The demo starts the simulated vehicle automatically. The dashboard is available
 at `http://localhost:8321`. Ctrl+C stops the demo. Text logs are copied to
 `fsd_ws/demo_logs`; recordings, build products, and model weights are excluded
 from version control. Run `run.ps1` after changing C++ sources.
+Bounded evaluations save `fsd_ws/demo_logs/evaluation.json`, including referee
+lap times, cone hits, path geometry, vehicle state and emergency-brake status.
+The optional evaluator reads simulator reference data; autonomy never consumes it.
 
 ## Algorithm checks
 

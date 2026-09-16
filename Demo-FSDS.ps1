@@ -2,7 +2,9 @@
 param(
     [switch]$SkipBuild,
     [switch]$KeepSimulator,
-    [int]$DashboardPort = 8321
+    [int]$DashboardPort = 8321,
+    [ValidateRange(0, 900)]
+    [int]$EvaluationSeconds = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,7 +46,7 @@ Copy-Item -LiteralPath $settingsSource -Destination $binarySettingsTarget -Force
 Stop-FsdsProcesses
 Start-Sleep -Seconds 2
 Start-Process -FilePath $simulatorExe -ArgumentList @(
-    '/Game/TrainingMap?listen', '-WINDOWED', '-ResX=1280', '-ResY=720'
+    '/Game/TrainingMap?listen', '-WINDOWED', '-ResX=960', '-ResY=540'
 ) | Out-Null
 
 Write-Host 'Waiting for the FSDS RPC server...' -ForegroundColor DarkCyan
@@ -82,6 +84,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $buildArg = if ($SkipBuild) { '--skip-build' } else { '--build' }
 $portArg = "--dashboard-port=$DashboardPort"
+$evaluationArg = "--evaluation-seconds=$EvaluationSeconds"
 
 # Open the UI after ROS has had time to build/start. Opening early is harmless;
 # the browser will show the page as soon as the dashboard begins listening.
@@ -94,7 +97,7 @@ $browserJob = Start-Job -ScriptBlock {
 try {
     Write-Host 'Starting bridge, autonomous stack, recorder, and dashboard...' -ForegroundColor Green
     Write-Host 'Live logs follow. Press Ctrl+C once to stop.' -ForegroundColor DarkGray
-    wsl -d kali-linux -u root -- bash $wslRunner $buildArg $portArg
+    wsl -d kali-linux -u root -- bash $wslRunner $buildArg $portArg $evaluationArg
     if ($LASTEXITCODE -ne 0) {
         throw "The demo stack exited with code $LASTEXITCODE. See fsd_ws\demo_logs for logs."
     }
@@ -108,7 +111,7 @@ finally {
     $windowsLogDir = Join-Path $workspace 'demo_logs'
     New-Item -ItemType Directory -Path $windowsLogDir -Force | Out-Null
     $wslWindowsLogs = '/mnt/c/' + ($windowsLogDir.Substring(3) -replace '\\', '/')
-    wsl -d kali-linux -u root -- bash -lc "if test -d /root/fsd_ws/demo_logs/latest; then mkdir -p '$wslWindowsLogs'; cp -f /root/fsd_ws/demo_logs/latest/*.log '$wslWindowsLogs/' 2>/dev/null || true; fi"
+    wsl -d kali-linux -u root -- bash -lc "if test -d /root/fsd_ws/demo_logs/latest; then mkdir -p '$wslWindowsLogs'; find -L /root/fsd_ws/demo_logs/latest -maxdepth 1 -type f \( -name '*.log' -o -name 'evaluation.json' \) -exec cp -t '$wslWindowsLogs' {} +; fi"
     if (-not $KeepSimulator) {
         Stop-FsdsProcesses
     }

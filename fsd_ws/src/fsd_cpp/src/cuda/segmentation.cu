@@ -10,6 +10,7 @@
 // Thresholds and grayscale weights mirror the CPU fallback exactly.
 
 #include "fsd_cpp/segmentation.hpp"
+#include "fsd_cpp/hsv_thresholds.hpp"
 
 #include <cuda_runtime.h>
 
@@ -66,12 +67,11 @@ __global__ void segment_kernel(const uint8_t * __restrict__ bgr,
   const uint8_t r = bgr[3 * i + 2];
   int h, s, v;
   bgr_to_hsv(b, g, r, h, s, v);
-  // Thresholds tuned on live FSDS frames (overexposed, desaturated cones):
-  // blue S>=105 rejects the ~S90 blue sky; yellow S>=50 catches the
-  // desaturated yellow cone (measured S~63). See MEMORY.md.
-  mb[i] = (h >= 100 && h <= 130 && s >= 105 && v >= 60) ? 255 : 0;
-  my[i] = (h >= 20 && h <= 38 && s >= 50 && v >= 90) ? 255 : 0;
-  mo[i] = (h >= 5 && h <= 18 && s >= 90 && v >= 90) ? 255 : 0;
+  // Use the same thresholds as the CPU path, including pale yellow cones.
+  using namespace fsd_hsv;
+  mb[i] = (h >= blue_h_min && h <= blue_h_max && s >= blue_s_min && v >= blue_v_min) ? 255 : 0;
+  my[i] = (h >= yellow_h_min && h <= yellow_h_max && s >= yellow_s_min && v >= yellow_v_min) ? 255 : 0;
+  mo[i] = (h >= orange_h_min && h <= orange_h_max && s >= orange_s_min && v >= orange_v_min) ? 255 : 0;
   gray[i] = bgr_to_gray(b, g, r);
 }
 

@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <memory>
+#include <array>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -55,11 +56,13 @@ public:
     declare_parameter<double>("steering_sign", -1.0);
     // Skip waiting for the GO signal during bench bring-up.
     declare_parameter<bool>("auto_go", false);
+    declare_parameter<bool>("wheel_speed_from_rotation", true);
 
     steer_max_ = get_parameter("max_steering_rad").as_double();
     tq_max_ = get_parameter("torque_max_nm").as_double();
     steer_sign_ = get_parameter("steering_sign").as_double();
     go_ = get_parameter("auto_go").as_bool();
+    rotation_speed_ = get_parameter("wheel_speed_from_rotation").as_bool();
 
     cmd_sub_ = create_subscription<VehicleCmd>(
       "/control/cmd", fsd::qos_reliable(1),
@@ -88,6 +91,39 @@ public:
       [this](fs_msgs::msg::WheelStates::ConstSharedPtr m) {
         fsd_msgs::msg::WheelSpeeds w;
         w.header.stamp = m->header.stamp;
+        if (rotation_speed_) {
+          const double t = fsd::stamp_to_sec(m->header.stamp);
+          const std::array<double, 4> angles{m->fl_rotation_angle, m->fr_rotation_angle,
+            m->rl_rotation_angle, m->rr_rotation_angle};
+          if (!std::all_of(angles.begin(), angles.end(), [](double a) { return std::isfinite(a); })) {
+            return;
+          }
+          const double dt = t - wheel_t_;
+          if (wheel_t_ >= 0.0 && dt <= 0.0) { return; }
+          if (wheel_t_ < 0.0 || dt > 0.5) {
+            wheel_t_ = t;
+            wheel_angles_ = angles;
+            wheel_velocity_.fill(0.0);
+            return;
+          }
+          // FSDS RPM is a physics-time velocity, but its sensor timestamps use
+          // wall time. Under rendering load physics runs slower than wall time:
+          // integrating RPM over wall time stretched a 50 m run into 95 m.
+          // Encoder angle differences preserve travelled distance in that case.
+          const double alpha = dt / (0.06 + dt);
+          for (size_t i = 0; i < angles.size(); ++i) {
+            const double omega = std::remainder(angles[i] - wheel_angles_[i], 2.0 * M_PI) / dt;
+            wheel_velocity_[i] += alpha * (omega - wheel_velocity_[i]);
+          }
+          wheel_angles_ = angles;
+          wheel_t_ = t;
+          w.fl = static_cast<float>(wheel_velocity_[0] * std::cos(m->fl_steering_angle));
+          w.fr = static_cast<float>(wheel_velocity_[1] * std::cos(m->fr_steering_angle));
+          w.rl = static_cast<float>(wheel_velocity_[2]);
+          w.rr = static_cast<float>(wheel_velocity_[3]);
+          wheels_pub_->publish(w);
+          return;
+        }
         w.fl = static_cast<float>(m->fl_rpm * kRpmToRadPerSec);
         w.fr = static_cast<float>(m->fr_rpm * kRpmToRadPerSec);
         w.rl = static_cast<float>(m->rl_rpm * kRpmToRadPerSec);
@@ -147,6 +183,9 @@ private:
 
   double steer_max_, tq_max_, steer_sign_;
   bool go_{false}, finished_{false}, ebs_{false};
+  bool rotation_speed_{true};
+  double wheel_t_{-1.0};
+  std::array<double, 4> wheel_angles_{}, wheel_velocity_{};
   double last_steer_{0.0};
 
   rclcpp::Subscription<VehicleCmd>::SharedPtr cmd_sub_;

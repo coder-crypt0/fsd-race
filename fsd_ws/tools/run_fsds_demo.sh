@@ -3,14 +3,20 @@ set -Eeuo pipefail
 
 BUILD=1
 DASHBOARD_PORT=8321
+EVALUATION_SECONDS=0
 for arg in "$@"; do
   case "$arg" in
     --build) BUILD=1 ;;
     --skip-build) BUILD=0 ;;
     --dashboard-port=*) DASHBOARD_PORT="${arg#*=}" ;;
+    --evaluation-seconds=*) EVALUATION_SECONDS="${arg#*=}" ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
+if [[ ! "$EVALUATION_SECONDS" =~ ^[0-9]+$ ]] || (( EVALUATION_SECONDS > 900 )); then
+  echo "Evaluation duration must be an integer from 0 to 900 seconds." >&2
+  exit 2
+fi
 
 WS=/root/fsd_ws
 FSDS_REPO=/root/FSDS_repo
@@ -45,7 +51,9 @@ cleanup() {
   docker stop --time 5 "$CONTAINER" >/dev/null 2>&1 || true
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap "exit 130" INT
+trap "exit 143" TERM
 
 echo "FSDS host: $HOST_IP:41451"
 echo "Logs:      $LOG_DIR"
@@ -57,6 +65,7 @@ docker run --name "$CONTAINER" --rm --net=host \
   -e FSD_HOST_IP="$HOST_IP" \
   -e FSD_LOG_DIR="/ws/demo_logs/$STAMP" \
   -e FSD_DASHBOARD_PORT="$DASHBOARD_PORT" \
+  -e FSD_EVALUATION_SECONDS="$EVALUATION_SECONDS" \
   -v "$WS:/ws" \
   -v "$FSDS_REPO:/fsds:ro" \
   "$IMAGE" bash -lc '
@@ -81,14 +90,22 @@ mkdir -p /root/Formula-Student-Driverless-Simulator
 cp /ws/fsds/settings.json /root/Formula-Student-Driverless-Simulator/settings.json
 
 cleanup_inner() {
-  [[ -n "${STACK_PID:-}" ]] && kill -INT "$STACK_PID" 2>/dev/null || true
-  [[ -n "${BRIDGE_PID:-}" ]] && kill -INT "$BRIDGE_PID" 2>/dev/null || true
-  wait 2>/dev/null || true
+  # Background jobs may inherit SIGINT ignored from Bash. Each launcher owns
+  # a separate process group so TERM also reaches its nodes; cleanup is bounded.
+  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}"; do
+    [[ -n "$pid" ]] && kill -TERM -- "-$pid" 2>/dev/null || true
+  done
+  sleep 2
+  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}"; do
+    [[ -n "$pid" ]] && kill -KILL -- "-$pid" 2>/dev/null || true
+  done
 }
-trap cleanup_inner EXIT INT TERM
+trap cleanup_inner EXIT
+trap "exit 130" INT
+trap "exit 143" TERM
 
 echo "[2/4] Starting the FSDS ROS bridge..."
-ros2 launch fsds_ros2_bridge fsds_ros2_bridge.launch.py host:="$FSD_HOST_IP" \
+setsid ros2 launch fsds_ros2_bridge fsds_ros2_bridge.launch.py host:="$FSD_HOST_IP" \
   >"$FSD_LOG_DIR/bridge.log" 2>&1 &
 BRIDGE_PID=$!
 
@@ -115,7 +132,12 @@ if ! timeout 15 ros2 topic echo /fsds/cam_left/image_color --once \
 fi
 
 echo "[3/4] Starting perception, mapping, planning, control, safety, and dashboard..."
-ros2 launch fsd_cpp fsds.launch.py >"$FSD_LOG_DIR/stack.log" 2>&1 &
+if (( FSD_EVALUATION_SECONDS > 0 )); then
+  setsid python3 /ws/tools/evaluate_fsds.py --seconds "$FSD_EVALUATION_SECONDS" \
+    --output "$FSD_LOG_DIR/evaluation.json" >"$FSD_LOG_DIR/evaluation.log" 2>&1 &
+  EVAL_PID=$!
+fi
+setsid ros2 launch fsd_cpp fsds.launch.py >"$FSD_LOG_DIR/stack.log" 2>&1 &
 STACK_PID=$!
 
 for _ in $(seq 1 40); do
@@ -127,17 +149,17 @@ echo "[4/4] Demo is live. The vehicle starts autonomously; no GO click is requir
 echo "       Dashboard: http://localhost:$FSD_DASHBOARD_PORT"
 echo "       Ctrl+C stops everything cleanly."
 
-# Compact live status once per second. Full node output remains in stack.log.
+# Compact live status every two seconds. Full node output remains in stack.log.
 while kill -0 "$STACK_PID" 2>/dev/null && kill -0 "$BRIDGE_PID" 2>/dev/null; do
+  if [[ -n "${EVAL_PID:-}" ]] && ! kill -0 "$EVAL_PID" 2>/dev/null; then
+    wait "$EVAL_PID"
+    echo "Bounded evaluation finished. Results: $FSD_LOG_DIR/evaluation.json"
+    cat "$FSD_LOG_DIR/evaluation.log"
+    exit 0
+  fi
   printf "[%s] " "$(date +%H:%M:%S)"
-  timeout 2 ros2 topic echo /odometry/filtered --once \
-    --field twist.twist.linear.x \
-    2>/dev/null | tr -d "\n" || printf "waiting for vehicle"
-  printf " | cones="
-  timeout 2 ros2 topic echo /mapping/track --once --field cones \
-    2>/dev/null | grep -c "^[[:space:]]*- id:" || printf "?"
-  printf " | dashboard=%s\n" "$FSD_DASHBOARD_PORT"
-  sleep 1
+  python3 /ws/tools/demo_status.py "$FSD_DASHBOARD_PORT"
+  sleep 2
 done
 
 echo "A required process exited. Recent logs:" >&2
