@@ -104,11 +104,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('evaluation', type=Path)
     parser.add_argument('--reference', type=Path)
+    parser.add_argument('--require-clean-lap', action='store_true',
+                        help='Exit nonzero unless a new lap completed without cone hits or EBS')
     args = parser.parse_args()
     data = json.loads(args.evaluation.read_text(encoding='utf-8'))
-    print(json.dumps(summarize(data), indent=2))
+    summary = summarize(data)
+    print(json.dumps(summary, indent=2))
+    corridor = None
     if args.reference:
-        print(json.dumps(corridor_metrics(data, json.loads(args.reference.read_text())), indent=2))
+        corridor = corridor_metrics(data, json.loads(args.reference.read_text()))
+        print(json.dumps(corridor, indent=2))
     print('\ntime  est_v  ref_v  position_error  heading_error_deg  cones_down_or_out')
     rows = [s for s in data['samples'] if 'odom' in s and 'reference' in s]
     for s in rows[::max(1, len(rows) // 12)]:
@@ -118,6 +123,19 @@ def main():
               f"{math.hypot(e['x']-r['x'], e['y']-r['y']):14.2f} "
               f"{math.degrees(math.atan2(math.sin(dh), math.cos(dh))):18.2f} "
               f"{s.get('referee', {}).get('doo_counter', '?')}")
+    if args.require_clean_lap:
+        referees = [s['referee'] for s in data['samples'] if 'referee' in s]
+        if not referees or len(referees[-1]['laps']) <= len(referees[0]['laps']):
+            raise SystemExit('FAIL: no new referee-confirmed lap completed during this evaluation')
+        if referees[-1]['doo_counter'] != referees[0]['doo_counter']:
+            raise SystemExit('FAIL: referee cone-hit count increased')
+        if summary['ebs_sample_count'] or summary['supervisor_ebs_samples']:
+            raise SystemExit('FAIL: an emergency stop occurred')
+        if data.get('rates_hz', {}).get('ebs', 0) < 1:
+            raise SystemExit('FAIL: supervisor emergency-stop telemetry unavailable')
+        if corridor and corridor['body_outside_samples']:
+            raise SystemExit('FAIL: sampled vehicle body left the reference corridor')
+        print('PASS: referee-confirmed clean lap; no cone hits or emergency stop')
 
 
 if __name__ == '__main__':
