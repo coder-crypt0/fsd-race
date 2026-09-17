@@ -14,8 +14,8 @@
 // absolute frame ids (/fsds/cam_left/image_color) — those are remapped in
 // fsds.launch.py.
 //
-// Speed source is /wheel_states (per-wheel RPM), the legitimate wheel-encoder
-// equivalent — the same signal class the real car's encoders provide. FSDS's
+// Speed source is /wheel_states (encoder rotation increments by default),
+// the same signal class the real car's encoders provide. FSDS's
 // GSS ground-speed sensor is not used (not always published, and a magic
 // ground-speed sensor is not what the real car has).
 

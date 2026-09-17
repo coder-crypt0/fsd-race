@@ -1,101 +1,169 @@
 # fsd-race
 
-A camera-based Formula Student driverless research stack using ROS 2, C++17,
-optional CUDA perception, and the Formula Student Driverless Simulator (FSDS).
-The deployment target is NVIDIA Jetson Orin Nano; hardware performance has not
-yet been measured on that device.
+Single-camera autonomous racing research for Formula Student / Formula Bharat,
+built around **ROS 2, C++17 and the Formula Student Driverless Simulator (FSDS)**.
 
-## Development status
+The system detects colored cones, estimates motion from IMU and wheel encoders,
+builds an online cone map, plans a local corridor, and controls the simulated car.
+It starts autonomously from a fresh spawn without a preloaded track.
 
-This is an experimental simulator project. Two fresh-spawn FSDS TrainingMap runs
-completed laps in 151.36 and 157.34 seconds with zero referee cone hits on
-16 September 2026. Repeatability testing is in progress; race-speed operation and other tracks are
-not validated. See the [validation record](docs/validation.md) for measured limits.
-The current default uses one forward camera with HSV cone detection and
-calibrated flat-ground monocular ranging in FSDS. No trained YOLO model is bundled
-or enabled. Real-camera height, pitch and intrinsics require separate calibration.
+## Project status
 
-## Architecture
+**Engineering demonstrator — clean laps demonstrated, repeatability not yet achieved.**
+Reviewed **16 September 2026**, against driving implementation `79502e9`.
+This is not a race-ready or real-vehicle-certified release.
 
-Camera images feed cone detection and ranging. Wheel speed and IMU measurements
-feed state estimation. Cone mapping, local path planning, motion control, and a
-safety supervisor communicate through the messages in `fsd_msgs`.
+| Capability | Implemented / observed status |
+|---|---|
+| One forward RGB camera | Active; 424 × 320, 70° horizontal FOV |
+| LiDAR / stereo / neural detector | None active; no YOLO weights or inference runtime |
+| Cone perception | HSV masks, geometry rejection, monocular ground-foot ranging |
+| Online mapping | Confirmed landmarks and color-based boundaries; accumulated drift remains |
+| Unseen-track driving | Local corridor planning; two clean FSDS TrainingMap laps recorded |
+| Recovery | Brief corridor loss can stop and resume automatically; EBS stays latched |
+| Obstacle handling | Cone-like objects and blockage logic; general/dynamic objects unvalidated |
+| Known-track racing line | Implemented, experimental; full-speed clean laps not demonstrated |
+| Jetson Orin Nano | Deployment target; hardware build, timing and vehicle tests outstanding |
 
-- `fsd_ws/src/fsd_cpp`: C++ runtime, optional CUDA kernels, FSDS adapter.
-- `fsd_ws/src/fsd_msgs`: ROS message definitions.
-- `fsd_ws/src/fsd_stack`: Python reference implementation and telemetry dashboard.
-- `fsd_ws/fsds/settings.json`: single-camera simulator configuration.
-- `fsd_ws/tools`: demo launcher and record/replay utilities.
-- `fsd_ws/firmware`: embedded bridge prototype; not validated for vehicle use.
+Three dedicated fresh-spawn lap trials produced **two clean laps: 151.362 s and
+157.341 s**, each with **zero referee cone hits**. The third stopped on stale
+IMU/wheel data before finishing. A later resource-profiling run reproduced that
+stop. These are individual trials, not a statistically established reliability
+rate. See the [validation record](docs/validation.md).
 
-## Windows FSDS demo
+The first-lap limit is **2.5 m/s in the controller's time base**. The 10 m/s
+known-track setting is an unvalidated ceiling, not achieved race performance.
+An unknown track cannot be globally optimized before it is observed; the first
+lap uses online, local planning.
 
-The current convenience launcher expects an existing local installation:
+## Sensor policy: one camera, no LiDAR
+
+The supported demo uses only `cam_left`—a historical name for the single
+centered, forward-facing RGB camera. The live detector has **one image
+subscription**, no right-image subscription, and no point-cloud input.
+
+IMU and wheel encoders support motion estimation; “single camera” does not mean
+vision-only odometry. FSDS settings still enable GSS, but autonomy does **not**
+consume GSS, GPS, referee geometry or reference odometry. Read-only evaluation
+tools consume `/testing_only/*` for scoring, not driving. Optional stereo and
+multi-camera code remains disabled. [Sensor specification →](FSD_System_Interface_Specification.md)
+
+## Run the Windows demo
+
+The convenience launcher uses an existing workstation installation:
 
 - FSDS at `%USERPROFILE%\FSDS\FSDS.exe`.
 - Kali WSL with Docker and the local `fsd-test:latest` image.
-- A built FSDS ROS 2 bridge at `/root/FSDS_repo/ros2/install` in WSL.
-- The project workspace is synchronized to `/root/fsd_ws` by the launcher.
+- Built FSDS ROS 2 bridge at `/root/FSDS_repo/ros2/install`.
+- Ext4 workspace at `/root/fsd_ws`, synchronized by the launcher.
 
-These dependencies are not bundled, and the launcher does not provision a fresh
-machine. See [workspace instructions](fsd_ws/README.md) for ROS dependencies and
-manual build commands, and the [official FSDS documentation](https://fs-driverless.github.io/Formula-Student-Driverless-Simulator/)
-for simulator installation.
-
-From PowerShell in this directory:
+External dependencies are not bundled or automatically provisioned.
 
 ```powershell
-.\run.ps1          # synchronize, build, launch
-.\run-nobuild.ps1  # synchronize configuration and launch existing binaries
-.\run-nobuild.ps1 -EvaluationSeconds 190  # record a bounded run and stop cleanly
+.\run.ps1                               # synchronize, build, launch
+.\run-nobuild.ps1                       # reuse the last compiled binaries
+.\run-nobuild.ps1 -EvaluationSeconds 190  # bounded evaluation, then stop
 ```
 
-The demo starts the simulated vehicle automatically. The dashboard is available
-at `http://localhost:8321`. Ctrl+C stops the demo. Text logs are copied to
-`fsd_ws/demo_logs`; recordings, build products, and model weights are excluded
-from version control. Run `run.ps1` after changing C++ sources.
-Bounded evaluations save `fsd_ws/demo_logs/evaluation.json`, including referee
-lap times, cone hits, path geometry, vehicle state and emergency-brake status.
-The optional evaluator reads simulator reference data; autonomy never consumes it.
+The car starts automatically in **FSDS TrainingMap**. The dashboard opens at
+[localhost:8321](http://localhost:8321). Ctrl+C stops the demo; `-KeepSimulator`
+keeps the simulator open on exit. Use `run.ps1` after C++ changes.
 
-## Algorithm checks
+The launcher deliberately restarts existing FSDS processes for a fresh spawn.
+Logs and evaluation JSON are copied to `fsd_ws/demo_logs`; timestamped originals
+remain in WSL. Exit code zero means the process ran successfully—not that a
+clean lap passed. [Setup and troubleshooting →](docs/operations.md)
 
-With Bash and a C++17 compiler:
+## How it works
+
+```text
+One RGB camera → cone detection + monocular ranging ─┬→ local corridor planner
+                                                     └→ persistent cone map
+IMU + wheel encoders → estimated pose ────────────────→ map / planner / control
+Planner → path + speed ceiling → Pure Pursuit + PI → FSDS adapter → vehicle
+Node health + command/pose checks → safety supervisor → latched emergency brake
+```
+
+The dashboard visualizes the estimated map, path, orientation, trail, health
+and controls. Its map is not simulator truth, and its lap display is not the
+official referee result. [Detailed architecture →](ARCHITECTURE.md)
+
+## Measured accuracy and resource usage
+
+| Measurement | Observed result / scope |
+|---|---|
+| Clean-run maximum accumulated position error | 5.241 m and 3.544 m over the complete recording windows |
+| Minimum sampled body-to-boundary clearance | 0.305 m and 0.340 m; 5 Hz reference-polyline comparison |
+| Perception publication rate in clean runs | 11.83 Hz and 10.19 Hz |
+| Control / estimated odometry publication | Approximately 50 Hz in clean runs |
+| Cone precision, recall, mAP | Not measured on an annotated dataset |
+| PC host CPU, 30-s post-stop snapshot | 45.65% mean across 22 logical CPUs; includes other applications |
+| FSDS rendering GPU, same profiling run | 89.71% mean for the FSDS process's 3D engine |
+| Seven C++ nodes, post-stop snapshot | 46.39% of **one CPU core** combined, not 46.39% of the PC |
+| Autonomy CUDA usage | CPU-only build; CUDA not exercised |
+| Jetson CPU/GPU/RAM/power/latency | Not measured |
+
+Host: Intel Core Ultra 7 155H / Intel Arc laptop, approximately 32 GB RAM.
+Resource samples were collected **after a stale-sensor emergency stop**, with
+rendering and nodes still running. They are not moving-lap or worst-case
+benchmarks. [Per-process measurements and methods →](docs/performance.md)
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Architecture](ARCHITECTURE.md) | Data flow, algorithms, mission states and safety limitations |
+| [Specifications and interfaces](FSD_System_Interface_Specification.md) | Sensors, calibration, frames, ROS contracts, rates, configuration |
+| [Operations](docs/operations.md) | Setup, demo, logs, captures, tests, storage and troubleshooting |
+| [Validation](docs/validation.md) | Successful and failed trials, accuracy definitions, acceptance checks |
+| [Performance](docs/performance.md) | CPU/GPU/RAM measurements and reproducible profiling |
+| [Jetson deployment](docs/jetson-deployment.md) | Orin Nano versus original Nano, camera integration, bring-up gates |
+| [Completion roadmap](docs/roadmap.md) | Remaining work and release acceptance criteria |
+| [Workspace guide](fsd_ws/README.md) | Packages, build commands, runtime/reference distinction |
+
+## Verification
+
+Standalone C++ checks, without ROS:
 
 ```bash
 bash fsd_ws/src/fsd_cpp/test/run_tests.sh
 ```
 
-These tests extract algorithm helpers from runtime sources and execute synthetic
-cases. They do not yet cover the complete ROS planner or controller lifecycle.
-
-## Runtime regression check
-
-After building the workspace in the ROS environment, run the isolated runtime
-regression suite to exercise the compiled C++ nodes' recovery, controlled-stop,
-planner-watchdog, and odometry behavior:
+Built-node regressions after building and sourcing the ROS workspace:
 
 ```bash
 cd fsd_ws
+source install/setup.bash
 python3 tools/test_runtime.py
 ```
 
-Build and source the workspace first (`colcon build --symlink-install` followed
-by `source install/setup.bash`); the check launches the installed C++ node
-binaries. It uses ROS domain 91 and does not require FSDS. See the
-[validation record](docs/validation.md) for its exact coverage and current
-end-to-end limitations.
+Evaluate a recorded run; optional reference geometry strengthens the check:
 
-## Current engineering priorities
+```bash
+python3 tools/summarize_fsds.py demo_logs/latest/evaluation.json \
+  --reference artifacts/reference.json --require-clean-lap
+```
 
-1. Record camera frames, detections, planned paths, and simulator reference pose
-   to explain the first corridor departure or path failure.
-2. Validate camera geometry, timestamp alignment, cone associations, and short
-   path behavior before increasing the configured speed ceiling.
-3. Evaluate cone-trained neural detectors on captured FSDS frames; verify class
-   mappings, preprocessing, inference latency, and model licensing.
-4. Benchmark the complete stack on the target Jetson and validate repeated laps.
+CI runs source/synthetic checks; it does not launch FSDS, benchmark a Jetson or
+certify a vehicle. [Test coverage →](docs/validation.md)
 
-The simulator, ROS dependencies, and any future model weights remain separate
-projects with their own licenses. Historical design documents describe intended
-behavior and must not be interpreted as verified implementation or certification.
+## Repository layout and scope
+
+```text
+fsd_ws/src/fsd_cpp/    C++ runtime, optional CUDA, FSDS adapter, configuration
+fsd_ws/src/fsd_msgs/   ROS message contracts
+fsd_ws/src/fsd_stack/  Live dashboard + legacy Python reference nodes
+fsd_ws/fsds/          Single-camera FSDS settings
+fsd_ws/tools/         Launch, capture, evaluation, regression and profiling
+fsd_ws/firmware/      Incomplete embedded bridge prototype
+docs/                Engineering handoff and evidence summaries
+```
+
+Build products, private context, recordings and model weights are ignored.
+Earlier architecture/specification versions remain in Git history; the kickoff
+questionnaire is historical background, not a hardware BOM.
+
+External dependencies retain their licenses. Package manifests declare MIT;
+the repository currently lacks a standalone LICENSE file. Resolve ownership and
+attribution before redistribution. No competition compliance or qualification
+approval is claimed.

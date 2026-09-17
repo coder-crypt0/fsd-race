@@ -3,7 +3,7 @@
 <package format="3">
   <name>fsd_cpp</name>
   <version>1.0.0</version>
-  <description>C++/CUDA implementation of the FSD stack for the Jetson Orin, with an FSDS (Formula Student Driverless Simulator) adapter. Stereo-camera only. Interfaces per FSD_System_Interface_Specification.md.</description>
+  <description>Experimental C++ autonomous racing stack with a single-camera FSDS profile, optional CUDA perception, and an FSDS adapter. No LiDAR is configured. Jetson deployment remains to be validated.</description>
   <maintainer email="183348113+coder-crypt0@users.noreply.github.com">FSD Team</maintainer>
   <license>MIT</license>
 

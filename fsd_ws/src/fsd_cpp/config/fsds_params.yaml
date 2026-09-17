@@ -103,13 +103,10 @@ path_planning:
     # The current validation target is repeatable clean laps. The controller
     # further limits speed by observed path length and curvature.
     v_explore_mps: 2.5
-    # Race speed is NOT "as fast as the car goes". Obstacle avoidance is only
-    # meaningful if the car can still stop for something it has just seen:
-    # 0.3 s of reaction plus v^2/(2*a_brake) must fit inside the range at which
-    # this camera reliably detects a cone (~12 m at 320x240). At a_brake = 6:
-    # 10 m/s -> 3.0 + 8.3 = 11.3 m. Raising this past ~10 m/s means accepting
-    # that an unexpected object cannot be avoided, so raise it only together
-    # with resolution/baseline (i.e. detection range), not on its own.
+    # Experimental known-track ceiling, not a demonstrated safe racing speed.
+    # At 10 m/s, a 0.3 s reaction plus braking at 6 m/s^2 needs 11.3 m.
+    # Reliable detection distance and braking capability at that speed have
+    # not been validated. The supported sensor profile remains monocular.
     v_race_mps: 10.0
 
 motion_control:

@@ -1,209 +1,226 @@
-# ARCHITECTURE — FSD Autonomous Stack
+# Architecture
 
-*How the code implements FSD_System_Interface_Specification.md. The spec
-defines WHAT the interfaces are; this document explains HOW and WHY.
-Last updated: 2026-07-07.*
+**16 September 2026 · FSDS monocular profile · C++ driving runtime**
 
-## 1. Bird's-eye view
+This describes what runs today. [Parameters](fsd_ws/src/fsd_cpp/config/fsds_params.yaml)
+and [message definitions](fsd_ws/src/fsd_msgs/msg) are authoritative. The Python
+driving nodes are older reference implementations, not behaviorally equivalent.
 
-Two parallel implementations of the same eight-block pipeline, sharing one
-message package and one topic contract:
+## 1. Deployment and data flow
 
-```
-                 ┌─────────────────────────────────────────────────────┐
-                 │                    fsd_msgs                         │
-                 │      (the locked contract — 12 message types)       │
-                 └───────────────▲──────────────────▲──────────────────┘
-                                 │                  │
-        ┌────────────────────────┴───┐   ┌──────────┴────────────────────┐
-        │        fsd_cpp (C++)       │   │      fsd_stack (Python)       │
-        │  PRODUCTION: Jetson + FSDS │   │  REFERENCE: algorithms, sim,  │
-        │  CUDA perception, 50 Hz    │   │  dashboard, CAN bridge,       │
-        │  control loops             │   │  quick experiments            │
-        └────────────────────────────┘   └───────────────────────────────┘
-```
-
-Rule: the two stacks stay **behaviorally equivalent per block**. Algorithm
-fixes land in both or go through a spec change.
-
-## 2. The pipeline (identical in both stacks)
-
-```
- cameras ──▶ [1+2 PERCEPTION] ──cones (base_link)──▶ [4 MAPPING] ──map──▶ [5 PLANNING]
-                                        ▲                  ▲                   │path
- IMU+wheels ──▶ [3 STATE ESTIMATION] ───┴── odom ──────────┴───────┬───────────▼
-                                                                   │      [6 CONTROL]
-                                                                   │           │cmd @50Hz
-             [8 SAFETY SUPERVISOR] ◀── heartbeats from ALL nodes   │           ▼
-                      │ebs_trigger                            [7 VEHICLE I/F]
-                      └───────────────────────────────────────▶ (STM32 / FSDS adapter)
-```
-
-| # | Block | C++ node | Python node | Rate |
-|---|---|---|---|---|
-| 1+2 | Perception (detection + stereo ranging) | `stereo_cone_node` | `cone_detection` + `cone_localization` | ≥30 Hz |
-| 3 | State estimation | `state_estimation_node` | `state_estimation` | 50 Hz |
-| 4 | Cone mapping | `cone_mapping_node` | `cone_mapping` | 10 Hz out |
-| 5 | Path planning | `path_planning_node` | `path_planning` | 10 Hz |
-| 6 | Motion control | `motion_control_node` | `motion_control` | fixed 50 Hz |
-| 7 | Vehicle interface | `fsds_adapter_node` (sim) / STM32 firmware (car) | `can_bridge` (car) | 50 Hz |
-| 8 | Safety supervisor | `safety_supervisor_node` | `safety_supervisor` | 20 Hz checks |
-
-Coordinate frames: `odom` (world-fixed, zeroed at AS Ready, continuous) and
-`base_link` (rear-axle center, x fwd / y left / z up). Perception outputs
-base_link; mapping and everything downstream works in odom.
-
-## 3. Perception design (Blocks 1+2)
-
-**GPU/CPU split principle:** the GPU does per-pixel work, the CPU does
-per-cone work.
-
-```
-left BGR frame                          right BGR frame
-   │  cudaMemcpy H→D                       │  cudaMemcpy H→D
-   ▼                                       ▼
-[CUDA: BGR→HSV→3 masks + gray, one pass]  [CUDA: BGR→gray]   src/cuda/segmentation.cu
-   │  masks D→H          └────gray stays on device────┘
-   ▼
-[CPU: morphology open → contours → bbox filters]        (per-cone, negligible)
-   ▼
-[CUDA: batched SAD disparity — one block per detection,
- 128 threads over disparities, shared-mem two-best
- reduction for the ratio test; only bbox centers up,
- N results down]
-   │      └─ ratio test fails → mono pinhole from known cone height (σ×3)
-   │      └─ any CUDA failure → identical CPU SAD fallback per bbox
-   ▼
-Cone3DArray in base_link (camera offset applied)
+```mermaid
+flowchart LR
+  subgraph Windows["Windows: FSDS / Unreal"]
+    RGB["One RGB camera"]
+    SENS["IMU + wheel encoders"]
+    CAR["Vehicle"]
+    REF["Referee + reference pose"]
+  end
+  subgraph ROS["WSL / Docker: ROS 2 Humble"]
+    BR["FSDS bridge"]
+    P["Monocular perception"]
+    A["FSDS adapter"]
+    E["Motion estimator"]
+    M["Cone mapper"]
+    PL["Path planner"]
+    C["Motion controller"]
+    SS["Safety supervisor"]
+    UI["Dashboard"]
+    EV["Read-only evaluator"]
+  end
+  RGB --> BR --> P
+  SENS --> BR
+  BR --> A --> E
+  BR --> E
+  P --> M
+  P --> PL
+  E --> M
+  E --> PL
+  E --> C
+  M --> PL --> C --> A --> CAR
+  SS --> A
+  M --> UI
+  PL --> UI
+  E --> UI
+  C --> UI
+  REF --> EV
+  E --> EV
 ```
 
-Why not full-frame SGBM: we only need range at ~20 bbox centroids, not a
-dense depth map — ROI matching is ~1000× less work. Why not YOLO in the C++
-sim path: FSDS cones are color-clean; HSV+contours is sufficient and keeps
-the sim loop dependency-free. On the real car, YOLO (TensorRT engine) slots
-into the Python `cone_detection` node or a future TensorRT C++ node — the
-`/perception/cones` contract doesn't change either way.
+Heartbeat, command and pose checks feed the supervisor; individual monitoring
+edges are omitted for readability. Evaluation has no feedback connection to
+autonomy. Each C++ node is a separate process with `rclcpp::spin`. There is no
+verified real-time scheduler or composed zero-copy pipeline. CPU OpenCV is the
+tested perception path; optional CUDA execution remains unvalidated.
 
-CUDA is optional at build time: CMake `check_language(CUDA)` compiles the
-kernel when a toolchain exists (JetPack on Orin, `CMAKE_CUDA_ARCHITECTURES`
-defaults to 87); otherwise the node builds with `segment_cpu()` (identical
-thresholds via cv::inRange). Runtime CUDA errors also fall back per-frame.
+## 2. Monocular perception
 
-## 4. Mapping (Block 4) — the data association core
+[stereo_cone_node.cpp](fsd_ws/src/fsd_cpp/src/stereo_cone_node.cpp) retains its
+historical name. `mono_only: true`, with no extra camera topics, means one input.
 
-```
-per detection (base_link) ──TF using pose INTERPOLATED at detection stamp──▶ odom
-  1. query confirmed map (spatial hash grid, 2 m cells) within SEARCH_RADIUS
-     └─ best under GATE → scalar-Kalman position update, vote color/side, done
-  2. else query tentative buffer
-     └─ hit → update; obs_count ≥ N_CONFIRM(3) → promote with persistent id
-     └─ miss → new tentative entry
-  3. GC: tentative entries older than 1.5 s with < N_CONFIRM obs are dropped
-```
+1. Convert the image to BGR and threshold blue, yellow and orange in HSV.
+2. Remove sky before contour extraction and close small gaps with a 3 × 3 kernel.
+3. Merge aligned vertical color fragments across white cone stripes.
+4. Reject small, implausibly shaped, truncated or physically oversized candidates.
+5. Range from the ground-contact row using calibrated flat-ground geometry.
+6. Publish cone coordinates in `base_link`, preserving the image timestamp.
 
-Invariants (violating these = bug, not tuning):
-- **Color is never an association gate** — spatial distance only; color
-  resolved by majority vote (YOLO/HSV flip yellow↔orange under bad light).
-- **Confirmed landmarks are never deleted mid-run** — occlusion ≠ absence.
-- C++ implementation is a **slot map**: one append-only landmark vector
-  (stable indices — entries never erased, they flip state TENTATIVE →
-  CONFIRMED or → DEAD), spatial hash grids with O(1) incremental insert
-  and lazy deletion (queries filter by state; stale/duplicate entries are
-  harmless), cell-crossing re-insert when a Kalman update moves a landmark
-  across a 2 m cell border, and a 10 s compaction timer. This removes the
-  index-invalidation hazard class by construction (see MEMORY.md for the
-  bug that motivated it).
+For the level FSDS camera:
 
-## 5. Planning (Block 5)
-
-```
-cone window (25 m ahead / 5 m behind, vehicle frame)
-  → Delaunay triangulation          C++: own Bowyer-Watson  |  Py: scipy.spatial
-  → keep edges joining OPPOSITE sides (blue↔yellow; side field when color unknown)
-  → length gate 1.5–6.0 m → midpoints → dedupe (<0.3 m)
-  → greedy forward chain from nearest midpoint (no reversals >~101°)
-  → spline                          C++: Catmull-Rom        |  Py: cubic B-spline
-  → resample @0.5 m with analytic heading + curvature
+```text
+depth = fy × camera_ground_height / (bbox_bottom − cy)
+left  = −(bbox_center_x − cx) × depth / fx
+forward_in_base = camera_offset_x + depth
 ```
 
-Fallback ladder (normative): fresh path → OK; compute fails ≤1 s → republish
-last valid + DEGRADED; >1 s → publish **empty** path + ERROR heartbeat, which
-the control staleness policy and supervisor turn into a controlled stop.
+Effective ground height is 0.8 m. Absolute camera RPC elevation includes a
+different simulator origin and must not replace that calibration. Intrinsics,
+resolution, horizon and mount geometry must stay consistent.
 
-The C++ Bowyer-Watson is O(n²) incremental with a super-triangle at 2000×
-the point-cloud span — verified against the empty-circumcircle definition
-and Euler's identity T = 2n−2−h (see `fsd_cpp/test/`).
+Depth uncertainty is a heuristic, not a calibrated confidence guarantee.
+Published detection confidence is fixed at **0.8**, not measured 80% accuracy.
+The published z value represents approximately the box center, not the cone
+foot; mapping and planning operate in planar x/y.
 
-## 6. Control (Block 6)
+With ground height zero, a known-cone-height monocular formula is available
+instead. Optional stereo matching and yawed cameras also exist, but neither is
+active in FSDS. No LiDAR or trained detector is used.
 
-Longitudinal plan on every new path (10 Hz):
-```
-v_i = min(v_max, sqrt(a_lat_max / |κ_i|))       lateral grip limit
-backward pass: v_i ≤ sqrt(v_{i+1}² + 2·a_brake·ds)   can we brake in time?
-forward pass:  v_i ≤ sqrt(v_{i-1}² + 2·a_accel·ds)   can we reach it?
-```
-Actuation every 20 ms (fixed timer, never event-driven):
-- Pure Pursuit: lookahead L_d = clamp(0.8·v, 2, 8) m; δ = atan(2L·sinα / L_d)
-- PI on speed error → torque (≥0) XOR brake (deadband at −0.3 m/s) — never both
-- Staleness: path >0.5 s → hold path, decay v_max at 2 m/s² (DEGRADED);
-  path >2 s or odom >0.2 s → emergency_stop=true (ERROR)
-- Torque is zeroed unless AS state == DRIVING (fed by adapter/bridge)
+Limits include exposure/lighting, blur, partial occlusion, same-color objects,
+slopes and pitch/roll. Camera Info does not dynamically update intrinsics.
+Real Pi-camera calibration and distortion handling still need integration.
 
-## 7. Safety architecture — three independent stop paths
+## 3. Motion estimation and clocks
 
-```
-PATH 1  HARDWARE   RES wireless stop → shutdown circuit. Zero software.
-PATH 2  FIRMWARE   STM32: no valid CAN cmd (CRC8+rolling counter) in 100 ms
-                   → zero torque; +100 ms → EBS. Catches a dead/insane Jetson.
-PATH 3  SOFTWARE   Supervisor: heartbeat watchdog (all nodes ≥5 Hz, 500 ms
-                   timeout), NaN/pose-jump/steering-limit/moving-blind checks.
-                   Publishes keepalive FALSE at 10 Hz — its own death is
-                   detectable downstream. Trigger latches until restart.
-```
-No two paths share a failure mode. The FSDS adapter honors the same
-`/safety/ebs_trigger` latch (full brake) so path 3 is exercised in sim.
+The [adapter](fsd_ws/src/fsd_cpp/src/fsds_adapter_node.cpp) derives angular speed
+from wheel rotation increments and timestamps, handles wrap and applies 0.06 s
+smoothing. Front wheels are projected by steering angle. The
+[estimator](fsd_ws/src/fsd_cpp/src/state_estimation_node.cpp) uses their mean
+with a 0.18 m effective radius, avoiding driven-rear-wheel spin.
 
-## 8. Simulation & test infrastructure
+On the loaded test host, raw FSDS physics-time RPM integrated over wall time
+substantially overestimated distance. Encoder increments better preserve
+displacement when physics runs slower than real time. This is a simulator
+adaptation, not a calibrated real-car model.
 
-- **FSDS** (`fsd_cpp/launch/fsds.launch.py` + `fsds/settings.json`): stereo
-  pair 640×480 @90° HFOV, 12 cm baseline (fx=fy=320 — set from geometry, not
-  calibration). Adapter converts VehicleCmd→fs_msgs/ControlCommand
-  (throttle=torque/max, steering normalized with a `steering_sign` switch),
-  GSS→wheel speeds, GO signal→AS_DRIVING.
-- **Kinematic sim** (`fsd_stack sim.launch.py`): elliptical track, bicycle
-  model, publishes ideal `/perception/cones` — full closed loop with zero
-  external installs. Honors command timeout and EBS like the firmware.
-- **Dashboard** (`:8321`): stdlib HTTP + canvas; consumes only contract
-  topics, so it works against sim, FSDS, bag replay, and the car unchanged.
-- **Bag platform**: `tools/fsd_bag.py` / dashboard REC. Replay stages:
-  `raw` (sensors in, full recompute), `cones` (perception out, downstream
-  recompute), `all` (verbatim playback).
-- **Standalone tests** (no ROS needed): `fsd_stack/test/test_algorithms.py`
-  (imports real node modules with rclpy stubbed);
-  `fsd_cpp/test/run_tests.sh` (extracts algorithm blocks verbatim from the
-  shipped .cpp files, compiles with g++, asserts Delaunay/spline/association
-  correctness).
+Yaw uses valid IMU orientation relative to startup, falling back to gyro
+integration when orientation becomes stale. Position integrates in 2D at a
+requested 50 Hz. Covariance grows heuristically with distance.
+This is **dead reckoning, not an EKF or validated visual-inertial SLAM**.
 
-## 9. Threading & performance rules
+Map pose correction exists but is disabled in mapper and estimator. Global
+position/map drift therefore accumulates. Very low simulated heading error
+cannot be transferred to a physical camera/IMU system.
 
-- One process per block in development; composition is a measured
-  optimization, not a default.
-- Any node with >1 input uses a MultiThreadedExecutor + per-subscription
-  callback groups (Python) / keeps callbacks non-blocking (C++ single
-  thread is fine at current rates).
-- Images: BEST_EFFORT KeepLast(1). Control/safety: RELIABLE. Never block a
-  ROS executor thread on GPU sync.
-- Profile before porting or optimizing: `ros2_tracing` + `tegrastats` on the
-  Orin. The Python stack exists precisely so hot-loop porting is a decision
-  backed by numbers.
+## 4. Cone mapping and track knowledge
 
-## 10. Extension points (designed-in, not speculative)
+[cone_mapping_node.cpp](fsd_ws/src/fsd_cpp/src/cone_mapping_node.cpp) queries a
+timestamped pose buffer to place observations into `odom`. Spatial-grid
+association searches confirmed landmarks, then tentative candidates. Distance
+gates scale with depth uncertainty. Scalar Kalman-style landmark updates fuse
+positions; votes determine color. Association is proximity-based, not a
+globally optimal or color-locked match.
 
-| Future change | Where it lands | What stays fixed |
-|---|---|---|
-| ZED2i camera | replace Blocks 1+2 internals | `/perception/cones` contract |
-| YOLO/TensorRT in C++ | new detector inside `stereo_cone_node` | same |
-| robot_localization EKF | swap Block 3 | `/odometry/filtered` |
-| EKF-SLAM / loop closure | inside Block 4 | `/mapping/track` |
-| MPC controller | inside Block 6 | `/control/cmd` |
-| CAN FD | Block 7 both sides | message semantics |
+Three sightings confirm a landmark. Tentative candidates expire after 1.5 s;
+confirmed entries persist for the run. Blue implies LEFT, yellow RIGHT,
+regardless of the cone's observed side relative to the car. Orange/unknown
+landmarks retain side votes.
+
+The map is built in memory. No robust map reload, global bundle adjustment or
+validated relocalization is provided. The two clean recordings ended with 208
+and 248 confirmed entries versus 196 reference cones: duplicate/drift errors
+remain.
+
+Lap knowledge comes from estimated motion crossing the startup region with
+distance/direction guards. `loop_closed` means a crossing was inferred, **not**
+that SLAM corrected the map. Referee lap completion is scored separately.
+
+## 5. Local planning and recovery
+
+[path_planning_node.cpp](fsd_ws/src/fsd_cpp/src/path_planning_node.cpp) starts in
+`MODE_EXPLORE`: online discovery while driving, not a separate mandatory
+exploration lap. There is no preloaded route.
+
+A 3 s local cone cache bridges brief camera dropouts, using image-time poses and
+preferring lower-uncertainty observations. Old cones expire. On the first lap,
+loss of local geometry cannot fall back to the entire accumulated map.
+
+The planner chains blue and yellow boundaries independently. With both edges,
+it forms midpoint geometry. With one edge, it offsets inward by half the
+assumed width (fallback 3.5 m). Color, not observed lateral sign, controls this
+offset, preventing reversed recovery when the car crosses a boundary.
+
+Delaunay opposite-boundary midpoints and ordered-chain search provide fallback
+geometry. Smoothing and Catmull–Rom interpolation generate roughly 0.5 m-spaced
+points with heading and curvature.
+
+No corridor means a **fresh empty path and zero speed limit**, not a re-stamped
+old path. The controller brakes without latching EBS and can resume when valid
+geometry returns. This does not guarantee recovery from arbitrary off-track
+positions or beyond the camera's field of view.
+
+## 6. Racing line and objects
+
+After an estimated lap crossing, `MODE_KNOWN` permits a closed corridor and
+constrained iterative racing-line optimization. A valid known-track path can
+request 10 m/s; local fallback remains capped at 2.5 m/s. Curvature and stopping
+distance further constrain the controller.
+
+This is a heuristic geometric racing line, not a proven minimum-time route.
+Accumulated map drift and closed-track reconstruction require more validation.
+Knowing the track flag alone does not prove safe high-speed operation.
+
+Repeated cone-like landmarks inside the corridor can trigger lateral avoidance
+or a zero-speed blockage response. Large orange cones are ignored as obstacles
+in this profile. There is no general object detector, pedestrian detector,
+moving-object tracker or validated dynamic-obstacle avoidance.
+
+## 7. Control and simulator actuation
+
+[motion_control_node.cpp](fsd_ws/src/fsd_cpp/src/motion_control_node.cpp) runs
+at a requested 50 Hz. Its velocity profile combines curvature limits, backward
+braking and forward acceleration passes. Pure Pursuit uses a speed-dependent
+2–8 m lookahead; PI speed control requests propulsion. The observed-path stopping
+limit reserves 0.3 s reaction time and 1 m distance. Upward cap changes ramp
+from rest; downward limits apply immediately.
+
+FSDS tuning: 1.55 m wheelbase, ±0.35 rad internal steering, 6 m/s² lateral and
+braking limits, 3 m/s² acceleration, 30 Nm propulsion scaling. These are
+software settings, not measured hardware dynamics. The adapter normalizes the
+steering/torque commands to simulator controls. Its reported steering echoes
+the command; it is not measured tire-angle feedback. Temperature/pressure
+fields are not simulated hardware measurements.
+
+## 8. Safety behavior and gaps
+
+| Condition | Response |
+|---|---|
+| Invalid/absent path, source stamp older than 0.5 s, endpoint behind car | Controlled braking, DEGRADED; can resume |
+| Previously active path publisher absent >2 s | Controller emergency command |
+| Odometry reception stale >0.2 s | Controller emergency command |
+| IMU or wheels stale >0.3 s | Estimator stops odometry and reports ERROR |
+| Required heartbeat missing >0.5 s after 5 s startup grace | Supervisor latches EBS |
+| Node ERROR, nonfinite command/pose, steering violation, >1 m pose jump | Supervisor latches EBS |
+| Moving >0.5 m/s with zero confirmed cones >8 s | Supervisor latches EBS |
+| EBS latched | Adapter full braking on control callbacks; restart needed |
+
+The supervisor emits a 10 Hz boolean keepalive. **The FSDS adapter does not
+enforce keepalive freshness or an independent command watchdog**; its brake
+response is sent on control callbacks. Controller/bridge/supervisor death needs
+dedicated failure-injection testing. Multiple checks on one computer are not
+independent certified braking channels.
+
+There is no validated physical E-stop, brake actuator, steering actuator, CAN
+watchdog or competition safety case in this release. Auto-GO is simulation-only.
+Never use this launch profile on an actuated real car.
+
+## 9. Observability
+
+The dashboard shows estimated map/path/pose, control, lap estimates and health.
+It does not show ground-truth accuracy or actual host CPU/GPU metrics.
+Recording/replay controls are diagnostic; never replay into a live control domain.
+HTTP binds all interfaces without authentication: trusted local networks only.
+
+The bounded evaluator independently records referee, reference pose, estimated
+state, paths, controls and EBS. [Validation](docs/validation.md) defines the
+limits of those measurements.

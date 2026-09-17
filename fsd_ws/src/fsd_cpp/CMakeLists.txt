@@ -21,7 +21,8 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 # ---------------------------------------------------------------- CUDA
 # Compiles the GPU segmentation kernel when a CUDA toolchain exists
 # (JetPack on the Orin ships one). Without CUDA the stereo node builds
-# with its complete CPU fallback — same results, more CPU load.
+# with its CPU path. Thresholds are shared, but CUDA equivalence and timing
+# still require execution tests on the target GPU.
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)

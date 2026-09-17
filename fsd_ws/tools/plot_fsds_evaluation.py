@@ -28,13 +28,13 @@ def main():
                                     ('odom','#9d547d','Estimated position','--')]:
         track.plot([s[key]['x'] for s in samples],[s[key]['y'] for s in samples],
                    style, lw=1.2, c=shade, label=label)
-    track.set(aspect='equal', xlabel='East (m)', ylabel='North (m)', title='Recorded trajectory and reference cones')
+    track.set(aspect='equal', xlabel='Startup-frame x (m)', ylabel='Startup-frame y (m)', title='Recorded trajectory and reference cones')
     track.legend(fontsize=8, loc='best')
     for key, shade, label in [('reference','#13835d','FSDS physics-time speed'),
                               ('odom','#9d547d','Encoder / wall-time speed')]:
         speed.plot([s['t'] for s in samples], [s[key]['speed'] for s in samples],
                    color=shade, lw=.8, alpha=.8, label=label)
-    speed.set(xlabel='Wall time (s)', ylabel='Speed (m/s)', title='Slow rendering makes the two clocks differ')
+    speed.set(xlabel='Wall time (s)', ylabel='Speed (m/s)', title='Different velocity time bases under simulator load')
     speed.legend(fontsize=8, loc='upper right')
     referee = samples[-1].get('referee', {})
     laps = ', '.join(f'{t:.2f} s' for t in referee.get('laps', [])) or 'none'
