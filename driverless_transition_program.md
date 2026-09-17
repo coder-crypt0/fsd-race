@@ -1,4 +1,12 @@
-# Welcome to the Driverless Transition Program 🏎️🤖
+# Historical requirements questionnaire
+
+This kickoff material is retained for background only. Its first-person claims,
+hardware suggestions and timelines are not verified project specifications.
+Use [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md) and the
+[current interface specification](FSD_System_Interface_Specification.md) for
+the implemented single-camera FSDS system and its measured limitations.
+
+## Original kickoff material
 
 Great to have you here! I've worked on ADAS systems across multiple OEMs and Tier-1s, and I've seen what it takes to build a competent autonomous stack — and trust me, going from EV to Driverless in Formula Student is one of the most exciting and challenging transitions you'll make.
 

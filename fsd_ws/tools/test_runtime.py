@@ -4,17 +4,26 @@ import os
 import math
 import subprocess
 import time
+import argparse
 
 # Never inject test data into a running vehicle/demo ROS graph.
 os.environ['ROS_DOMAIN_ID'] = '91'
 import rclpy
 from ament_index_python.packages import get_package_prefix
 from fsd_msgs.msg import Cone3D, Cone3DArray, PathPoint, PathPointArray, SpeedLimit, VehicleCmd, WheelSpeeds
+from fs_msgs.msg import WheelStates
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--frame', help='Optional captured stationary FSDS start image')
+    args = parser.parse_args()
     rclpy.init()
     node = rclpy.create_node('runtime_regression')
     binary = get_package_prefix('fsd_cpp') + '/lib/fsd_cpp/'
@@ -89,7 +98,11 @@ def main():
             p = PathPoint()
             p.x, p.track_width = float(i), 3.5
             path.points.append(p)
-        drive(1.0, path=path)
+        commands.clear()
+        drive(0.15, path=path)
+        assert commands and max(c.torque_request for c in commands) < 10.0, 'Startup bypassed speed ramp'
+        print('PASS: launch starts with a ramp, not full throttle')
+        drive(0.85, path=path)
         assert any(c.torque_request > 0 and not c.emergency_stop for c in commands[-20:])
         print('PASS: fresh corridor resumes propulsion automatically')
         commands.clear()
@@ -129,6 +142,72 @@ def main():
         q = estimates[-1].pose.pose.orientation
         assert abs(2 * math.atan2(q.z, q.w) - 0.4) < 0.01
         print('PASS: rear-wheel spin excluded; IMU heading prevents timer integration drift')
+        estimator.terminate()
+        estimator.wait(timeout=5)
+
+        converted = []
+        encoder_sub = node.create_subscription(WheelSpeeds, '/wheel_speeds', converted.append, 10)
+        raw_wheels = node.create_publisher(WheelStates, '/wheel_states', 10)
+        adapter = launch('fsds_adapter_node')
+        start = time.monotonic()
+        while time.monotonic() - start < 2.0:
+            elapsed = time.monotonic() - start
+            raw = WheelStates()
+            raw.header.stamp = node.get_clock().now().to_msg()
+            raw.fl_rotation_angle = raw.fr_rotation_angle = float((elapsed*6) % (2*math.pi))
+            raw.fl_rpm = raw.fr_rpm = 6000.0  # deliberately unrelated physics-time RPM
+            raw_wheels.publish(raw)
+            rclpy.spin_once(node, timeout_sec=0.01)
+            time.sleep(0.02)
+        assert converted and abs(converted[-1].fl - 6.0) < 0.2
+        assert all(abs(m.fl) < 7.0 for m in converted), 'Encoder wrap caused a speed spike'
+        print('PASS: FSDS encoder differences ignore physics-time RPM and unwrap angle')
+        adapter.terminate()
+        adapter.wait(timeout=5)
+
+        image_pub = node.create_publisher(Image, '/camera/left/image_raw', 1)
+        detections = []
+        detection_sub = node.create_subscription(Cone3DArray, '/perception/cones', detections.append, 5)
+        perception = subprocess.Popen([binary + 'stereo_cone_node', '--ros-args',
+            '-p', 'fx:=302.8', '-p', 'fy:=302.8', '-p', 'cx:=212.0', '-p', 'cy:=160.0',
+            '-p', 'ground_camera_height_m:=0.8', '-p', 'min_contour_area_px:=5',
+            '-p', 'mask_close_px:=3', '-p', 'min_aspect:=0.55'], stdout=subprocess.DEVNULL)
+        processes.append(perception)
+        bridge = CvBridge()
+
+        def send_frame(frame):
+            detections.clear()
+            end = time.monotonic() + 1.2
+            while time.monotonic() < end:
+                image = bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+                image.header.stamp = node.get_clock().now().to_msg()
+                image_pub.publish(image)
+                rclpy.spin_once(node, timeout_sec=0.03)
+                time.sleep(0.02)
+            assert detections, 'Perception did not publish'
+            return detections[-1].cones
+
+        frame = np.full((320, 424, 3), (90, 75, 70), dtype=np.uint8)
+        frame[:160] = (235, 194, 160)  # blue sky
+        cv2.rectangle(frame, (190, 0), (230, 162), (235, 100, 40), -1)
+        assert not send_frame(frame), 'Sky or bluish asphalt became a cone'
+        print('PASS: sky-connected blob and bluish asphalt are rejected')
+        # Pale yellow cone with a dark stripe; hue 30, saturation only 30.
+        pale = tuple(int(v) for v in cv2.cvtColor(np.uint8([[[30, 30, 220]]]), cv2.COLOR_HSV2BGR)[0, 0])
+        cv2.fillConvexPoly(frame, np.array([[280,190],[273,215],[287,215]], dtype=np.int32), pale)
+        frame[199:203,273:288] = (80,75,70)
+        cones = send_frame(frame)
+        assert any(c.color == 1 and 4.0 < c.x < 6.5 for c in cones), 'Pale yellow cone missed'
+        assert not any(c.color == 0 for c in cones), 'Sky became blue cone'
+        print('PASS: pale, striped yellow cone is detected and ground-ranged')
+        if args.frame:
+            captured = cv2.imread(args.frame)
+            assert captured is not None, 'Captured regression frame missing'
+            cones = send_frame(captured)
+            assert any(c.color == 0 and abs(c.x-3.88) < .5 and abs(c.y-1.39) < .3 for c in cones)
+            assert any(c.color == 1 and abs(c.x-9.44) < .8 and abs(c.y+1.97) < .4 for c in cones)
+            assert all(c.y > 0 for c in cones if c.color == 0), 'False blue cone in start corridor'
+            print('PASS: captured FSDS start frame detects both boundaries with plausible range')
     finally:
         for process in processes:
             if process.poll() is None:

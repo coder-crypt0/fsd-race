@@ -1,57 +1,14 @@
 # fsd_cpp parameters for running against FSDS with the SINGLE camera defined
 # in fsd_ws/fsds/settings.json.
 #
-# CAMERA GEOMETRY — why these numbers (see also ARCHITECTURE.md):
-#   ONE camera, 640x480 @ 90 deg HFOV, mounted 1.0 m ahead of and 0.8 m above
-#   the vehicle origin, on the centreline, pitch 0.
-#
-#   Single camera is the design target, not a fallback. It removes the two
-#   things that actually bite on a car that vibrates: keeping a stereo pair
-#   rectified, and keeping a measured baseline true. Bearing accuracy is
-#   identical either way (same pixel, same intrinsics); only range degrades,
-#   and range from a KNOWN CONE HEIGHT costs nothing to calibrate. An earlier
-#   stereo pair here ran at 320x240 because the Intel Arc iGPU could not
-#   sustain simGetImages on two 640x480 streams — one stream fits, so dropping
-#   the second camera bought back the resolution, and resolution is what mono
-#   range depends on:
-#       fx = fy = (width/2) / tan(HFOV/2) = 320 / tan(45 deg) = 320
-#       cx = width/2 = 320, cy = height/2 = 240
-#   A 0.325 m cone at 10 m is 10.4 px tall at fx = 320 but only 5.2 px at
-#   320x240, and mono range error is sigma = 1.5 * z / h_px — so the same cone
-#   is +-1.4 m at full res against +-2.9 m at half res.
-#
-#   Pitch stays at zero deliberately: with fy = 320 and a 0.8 m mount the
-#   ground enters frame 0.85 m in front of the camera already, so tilting down
-#   buys no near-field view, and a non-zero pitch would need a rotation in the
-#   pixel-to-bearing projection that the node does not carry.
-#
-#   cam_offset_y is 0.0 because the camera is on the centreline. With a stereo
-#   pair it MUST become the LEFT camera's own lateral offset (half the
-#   baseline, left positive) — the projection happens in the left camera frame,
-#   and leaving it at zero biases every cone sideways.
+# One level 424x320 camera, 70 degree horizontal FOV, mounted 1 m forward and
+# 0.8 m up. fx=fy=(424/2)/tan(35 degrees). Ground-plane ranging below is
+# calibrated for this flat FSDS track, not a substitute for hardware calibration.
 
 stereo_cone:
   ros__parameters:
     mono_only: true
-    # VERIFIED CONFIGURATION: one camera, 640x480 @ 90 deg HFOV, 1.0 m ahead of
-    # and 0.8 m above the vehicle origin, pitch 0. This is the setup that drove
-    # 465 m and mapped 422 cones. fx = fy = 320 / tan(45 deg) = 320 is pure
-    # pinhole geometry, no calibration.
-    #
-    # A 3-camera rig (-45/0/+45) is implemented and is the right answer for
-    # corners — a single 90 deg camera loses the inside boundary exactly when
-    # entering a turn. It is NOT enabled here because the first attempt at
-    # 3 x 424x320 mapped only 15 cones against 422, and that regression has not
-    # been diagnosed yet (suspects: sim frame rate with three streams, or the
-    # smaller cone pixel sizes at 424 px width versus min_contour_area_px and
-    # mask_close_px). Re-enable by setting camera_topics/camera_yaw_deg below
-    # and scaling the intrinsics to the chosen resolution.
-    # Leave camera_topics unset for the single forward camera remapped by the
-    # launch file. Multi-camera mono ranging created inconsistent duplicate
-    # landmarks at overlap boundaries in live FSDS testing.
-    # FSDS stability profile: 424x320 @ 70 deg HFOV. This preserves nearly
-    # the same focal length/range precision as 640x480 @ 90 deg while cutting
-    # image traffic by 56%, avoiding simGetImages RPC timeouts on the dev PC.
+    # camera_topics is intentionally unset: only the forward camera is used.
     fx: 302.8
     fy: 302.8
     cx: 212.0
@@ -61,9 +18,10 @@ stereo_cone:
     cam_offset_x: 1.0
     cam_offset_y: 0.0
     cam_offset_z: 0.8
+    ground_camera_height_m: 0.8  # calibrated against visible cone feet; mount height
     min_contour_area_px: 5
-    mask_close_px: 7           # bridge the white stripe; see stereo_cone_node
-    min_aspect: 0.7            # a cone is taller than wide; reject stripe bands
+    mask_close_px: 3           # small gaps only; aligned stripe boxes merge separately
+    min_aspect: 0.55
     max_aspect: 3.5
     horizon_row_px: 160        # level camera above ground: cy; gate bbox bottom
     max_disparity_px: 128
@@ -71,9 +29,10 @@ stereo_cone:
 
 state_estimation:
   ros__parameters:
-    wheel_radius_m: 0.228
+    wheel_radius_m: 0.18     # FSDS front-wheel source; ~0.184 m observed at steady speed
     publish_rate_hz: 50.0
-    # FSDS rear drive wheels spin under acceleration and are a poor odometer.
+    # The adapter derives speed from encoder increments. Raw FSDS RPM is a
+    # physics-time quantity and cannot be integrated against a slow wall clock.
     use_front_wheels: true
     use_imu_orientation: true
     use_map_correction: false
@@ -87,12 +46,7 @@ cone_mapping:
     gate_threshold_m: 0.5
     n_confirm: 3
     tentative_timeout_s: 1.5
-    # Mono range sigma = 0.0144*z^2 at fx=320: 1.5 m only let cones be mapped
-    # to ~10 m, which on a 4 m cone pitch is 2-3 gate pairs — too few to spline
-    # a path, and the run died with "chain of 2 midpoints too short". Mapping
-    # out to ~15 m instead is safe because a landmark is CREATED with that
-    # large variance and the Kalman update snaps it into place as soon as a
-    # close-range sighting (sigma ~0.2 m) arrives.
+    # Distant landmarks retain their larger observation uncertainty.
     max_spawn_sigma_m: 3.5
     gate_sigma_scale: 3.0
     gate_max_m: 1.5
@@ -146,19 +100,13 @@ path_planning:
     obstacle_speed_mps: 3.0
     blocked_confirm_frames: 3
     obstacle_ignore_big_orange: true
-    # Mono ranging maps cones to ~10 m, so the planned path is only a few
-    # metres long early in a lap. At 5 m/s the car outran its own map, pure
-    # pursuit aimed at the path end and went to full lock. Exploration speed
-    # must respect the length of the path that actually exists — and 2.5 m/s
-    # is still inside the Trackdrive minimum-average rule (D2.6.2).
+    # The current validation target is repeatable clean laps. The controller
+    # further limits speed by observed path length and curvature.
     v_explore_mps: 2.5
-    # Race speed is NOT "as fast as the car goes". Obstacle avoidance is only
-    # meaningful if the car can still stop for something it has just seen:
-    # 0.3 s of reaction plus v^2/(2*a_brake) must fit inside the range at which
-    # this camera reliably detects a cone (~12 m at 320x240). At a_brake = 6:
-    # 10 m/s -> 3.0 + 8.3 = 11.3 m. Raising this past ~10 m/s means accepting
-    # that an unexpected object cannot be avoided, so raise it only together
-    # with resolution/baseline (i.e. detection range), not on its own.
+    # Experimental known-track ceiling, not a demonstrated safe racing speed.
+    # At 10 m/s, a 0.3 s reaction plus braking at 6 m/s^2 needs 11.3 m.
+    # Reliable detection distance and braking capability at that speed have
+    # not been validated. The supported sensor profile remains monocular.
     v_race_mps: 10.0
 
 motion_control:
@@ -173,8 +121,10 @@ motion_control:
     a_brake_max: 6.0
     a_accel_max: 3.0
     torque_max_nm: 30.0
-    kp_speed: 12.0
-    ki_speed: 2.0
+    # Adapter normalizes 30 Nm to full simulator throttle. The old gain of 12
+    # caused throttle/brake oscillation and wheelspin even at a 2.5 m/s target.
+    kp_speed: 2.0
+    ki_speed: 0.8
     lookahead_gain_s: 0.8
     lookahead_min_m: 2.0
     lookahead_max_m: 8.0
@@ -189,6 +139,5 @@ fsds_adapter:
   ros__parameters:
     max_steering_rad: 0.35
     torque_max_nm: 30.0
-    wheel_radius_m: 0.228
     steering_sign: -1.0      # flip to +1.0 if the sim car steers mirrored
     auto_go: true            # sim testing: start without an operator GO signal

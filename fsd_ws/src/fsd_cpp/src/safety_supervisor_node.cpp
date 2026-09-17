@@ -31,10 +31,9 @@ public:
     // How long the car may move with an empty map before this is an emergency.
     // This covers driving blind, but it must not fire during BOOTSTRAP: the
     // mapper needs N_CONFIRM sightings of a cone before it publishes anything,
-    // so a car that has just started creeping legitimately has an empty map for
-    // a few seconds. At 3 s it was killing runs at t=6 s, before the first cone
-    // was ever confirmed. 8 s is ~20 m at exploration speed and still well
-    // inside the 30 s standstill limit the rules impose (FB2027 D2.6.1).
+    // so a car that has just started creeping can have an empty map for a few
+    // seconds. This is a simulator tuning value, not a certified safety or
+    // competition-compliance limit. Fresh-corridor checks act independently.
     declare_parameter<double>("blind_timeout_s", 8.0);
     required_ = get_parameter("required_nodes").as_string_array();
     steer_max_ = get_parameter("max_steering_rad").as_double();

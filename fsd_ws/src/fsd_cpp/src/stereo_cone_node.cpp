@@ -36,6 +36,7 @@
 #include <fsd_msgs/msg/heartbeat.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/hsv_thresholds.hpp"
 #ifdef FSD_USE_CUDA
 #include "fsd_cpp/segmentation.hpp"
 #endif
@@ -77,6 +78,9 @@ public:
     declare_parameter<double>("cam_offset_x", 1.0);
     declare_parameter<double>("cam_offset_y", 0.0);
     declare_parameter<double>("cam_offset_z", 0.8);
+    // A calibrated, level-camera flat-ground model. Zero retains known-height
+    // ranging for uncalibrated hardware; do not reuse the FSDS height on a car.
+    declare_parameter<double>("ground_camera_height_m", 0.0);
     declare_parameter<int>("min_contour_area_px", 60);
     // Height of the vertical CLOSE applied to each colour mask, in pixels.
     // FS cones are STRIPED: a white band across the middle cuts the coloured
@@ -134,6 +138,7 @@ public:
     off_x_ = get_parameter("cam_offset_x").as_double();
     off_y_ = get_parameter("cam_offset_y").as_double();
     off_z_ = get_parameter("cam_offset_z").as_double();
+    ground_height_ = get_parameter("ground_camera_height_m").as_double();
     min_area_ = get_parameter("min_contour_area_px").as_int();
     close_px_ = get_parameter("mask_close_px").as_int();
     min_aspect_ = get_parameter("min_aspect").as_double();
@@ -208,7 +213,8 @@ public:
 
     hb_ = std::make_unique<fsd::HeartbeatEmitter>(this, "stereo_cone");
     RCLCPP_INFO(get_logger(), "ranging: %s, %zu camera(s)",
-                mono_only_ ? "MONO (known cone height)" : "stereo + mono fallback",
+                mono_only_ ? (ground_height_ > 0.0 ? "MONO (calibrated ground plane)" :
+                  "MONO (known cone height)") : "stereo + mono fallback",
                 cams_.size());
     for (const auto & c : cams_) {
       RCLCPP_INFO(get_logger(), "  cam %s yaw %+.0f deg at (%.2f, %.2f)",
@@ -383,23 +389,28 @@ private:
   {
     // Thresholds must match segmentation.cu exactly.
     //
-    // Blue S>=105 was chosen to reject sky, and it cost us the track: measured
-    // on a live 640x480 frame, the sky is 305k blue-hued pixels at median
-    // saturation 22, while the blue CONES in this overexposed scene are barely
-    // more saturated. Sweeping the gate on that frame found 1 cone at S>=105
-    // against 4 at S>=50. Saturation was never what rejected the sky — the
-    // area and aspect filters do that, and they still leave only a handful of
-    // boxes even with the whole sky inside the mask. So the gate is set by what
-    // finds cones, not by what excludes sky.
+    // Captured FSDS asphalt overlapped the old blue S>=50,V>=60 range, joining
+    // real cones to the entire road. Separate that background here; sky and
+    // implausible physical dimensions are rejected by extract().
     cv::Mat hsv;
     cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
-    cv::inRange(hsv, cv::Scalar(100, 50, 60), cv::Scalar(130, 255, 255), mb);
-    cv::inRange(hsv, cv::Scalar(20, 40, 70), cv::Scalar(38, 255, 255), my);
-    cv::inRange(hsv, cv::Scalar(5, 80, 80), cv::Scalar(18, 255, 255), mo);
+    using namespace fsd_hsv;
+    cv::inRange(hsv, cv::Scalar(blue_h_min, blue_s_min, blue_v_min),
+                cv::Scalar(blue_h_max, 255, 255), mb);
+    cv::inRange(hsv, cv::Scalar(yellow_h_min, yellow_s_min, yellow_v_min),
+                cv::Scalar(yellow_h_max, 255, 255), my);
+    cv::inRange(hsv, cv::Scalar(orange_h_min, orange_s_min, orange_v_min),
+                cv::Scalar(orange_h_max, 255, 255), mo);
   }
 
   void extract(cv::Mat & mask, uint8_t color, std::vector<Det> & dets) const
   {
+    if (ground_height_ > 0.0) {
+      // Cones below a level elevated camera cannot extend into the sky. Cut it
+      // before morphology so sky/fence pixels cannot join a ground candidate.
+      const int row = std::clamp(static_cast<int>(cy_) + 1, 0, mask.rows);
+      if (row > 0) { mask.rowRange(0, row).setTo(0); }
+    }
     // Vertical CLOSE first: bridge the white stripe so one cone is one blob of
     // full height. No OPEN anywhere — it would erode distant cones, which are
     // only a few pixels, and the sim image is clean enough not to need it.
@@ -410,11 +421,29 @@ private:
     }
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    std::vector<cv::Rect> boxes;
     for (const auto & c : contours) {
-      if (cv::contourArea(c) < min_area_) {
-        continue;
+      if (cv::contourArea(c) >= 2.0) { boxes.push_back(cv::boundingRect(c)); }
+    }
+    // Rejoin stripes adaptively, without a tall fixed kernel that connects two
+    // separate distant cones. Components must share a vertical centre axis.
+    for (size_t i = 0; i < boxes.size(); ++i) {
+      for (size_t j = i + 1; j < boxes.size();) {
+        const auto a = boxes[i], b = boxes[j];
+        const double dx = std::abs(a.x + a.width / 2.0 - b.x - b.width / 2.0);
+        const int gap = std::max(a.y, b.y) - std::min(a.y+a.height, b.y+b.height);
+        const auto united = a | b;
+        if (dx <= 1.0 + 0.25 * std::max(a.width, b.width) && gap >= 0 &&
+            gap <= std::max(3.0, 0.8 * std::max(a.height, b.height)) &&
+            united.height <= 3.5 * united.width) {
+          boxes[i] = united;
+          boxes.erase(boxes.begin() + j);
+          j = i + 1;
+        } else { ++j; }
       }
-      const cv::Rect box = cv::boundingRect(c);
+    }
+    for (const auto & box : boxes) {
+      if (cv::countNonZero(mask(box)) < min_area_) { continue; }
       const double aspect = static_cast<double>(box.height) / std::max(box.width, 1);
       if (aspect < min_aspect_ || aspect > max_aspect_) {
         continue;
@@ -426,6 +455,18 @@ private:
       // cone whose top crosses the horizon.
       if (horizon_row_px_ >= 0 && box.y + box.height < horizon_row_px_) {
         continue;
+      }
+      if (ground_height_ > 0.0) {
+        const double below = box.y + box.height - cy_;
+        if (below <= 2.0 || box.y <= cy_ + 1 ||
+            box.y + box.height >= mask.rows - 1 || box.x <= 0 ||
+            box.x + box.width >= mask.cols - 1) { continue; }
+        const double depth = fy_ * ground_height_ / below;
+        const double height = depth * box.height / fy_;
+        const double width = depth * box.width / fx_;
+        // Reject sky remnants, road texture and physically implausible blobs.
+        // Broad size bounds allow a partly desaturated cone, not arbitrary sky.
+        if (height < 0.12 || height > 0.65 || width < 0.06 || width > 0.65) { continue; }
       }
       dets.push_back({color, box});
     }
@@ -482,6 +523,13 @@ private:
 
   void mono_range(const Det & d, double & depth, double & sigma) const
   {
+    if (ground_height_ > 0.0) {
+      const double below = d.box.y + d.box.height - cy_;
+      if (below <= 2.0) { depth = -1.0; return; }
+      depth = fy_ * ground_height_ / below;
+      sigma = std::hypot(1.5 * depth / below, 0.03 * depth);
+      return;
+    }
     if (d.box.height < 4) {
       depth = -1.0;
       return;
@@ -493,7 +541,7 @@ private:
   }
 
   double fx_, fy_, cx_, cy_, baseline_, max_range_;
-  double off_x_, off_y_, off_z_;
+  double off_x_, off_y_, off_z_, ground_height_;
   int min_area_, max_disp_, patch_half_, close_px_{9}, horizon_row_px_{-1};
   double min_aspect_{0.7}, max_aspect_{3.5};
   bool mono_only_{true};

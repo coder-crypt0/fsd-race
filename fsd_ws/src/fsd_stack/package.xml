@@ -3,7 +3,7 @@
 <package format="3">
   <name>fsd_stack</name>
   <version>1.0.0</version>
-  <description>FSD autonomous stack v1: perception, estimation, mapping, planning, control, safety, CAN bridge, and kinematic simulator. One module per block per FSD_System_Interface_Specification.md.</description>
+  <description>Telemetry dashboard and Python reference algorithms for fsd-race. The current FSDS driving runtime is fsd_cpp; the Python simulator and vehicle bridge are experimental reference components.</description>
   <maintainer email="183348113+coder-crypt0@users.noreply.github.com">FSD Team</maintainer>
   <license>MIT</license>
 
