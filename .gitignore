@@ -6,6 +6,7 @@
 MEMORY.md
 PROJECT_CONTEXT.md
 .env
+.env.dev
 .env.*
 !.env.example
 *.pem
