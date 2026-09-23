@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Cone detection topics and ROS 2 message formats</title>
+  <desc id="desc">Image input feeds a cone detector, which publishes 2D image detections and 3D cone coordinates using custom ROS 2 array messages.</desc>
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#101a28"/><stop offset="1" stop-color="#0b111b"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#54d5dc"/></marker>
+    <style>text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#edf3fa}.muted{fill:#97aabd}.tag{font-size:13px;letter-spacing:1.4px;fill:#54d5dc;font-weight:700}.mono{font-family:Consolas,Menlo,monospace}.key{fill:#8ddde0}.type{fill:#d5b9ff}.comment{fill:#8da1b4}.card{fill:#142131;stroke:#30465c;stroke-width:1.5}</style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <text x="72" y="74" class="tag">CONE PERCEPTION · CUSTOM ROS 2 MSGS</text>
+  <text x="72" y="126" font-size="38" font-weight="700">Detection topics &amp; message format</text>
+  <text x="72" y="158" font-size="17" class="muted">One source image produces an image-space detection list and a base_link 3D cone list.</text>
+  <rect x="72" y="215" width="250" height="114" rx="18" class="card"/><text x="197" y="254" text-anchor="middle" font-size="20" font-weight="650">Camera image</text><text x="197" y="284" text-anchor="middle" class="mono muted" font-size="14">sensor_msgs/Image</text><text x="197" y="307" text-anchor="middle" class="mono muted" font-size="13">/camera/left/image_raw</text>
+  <path d="M322 272H420" fill="none" stroke="#54d5dc" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="430" y="215" width="290" height="114" rx="18" fill="#17393d" stroke="#39aeb5" stroke-width="1.5"/><text x="575" y="254" text-anchor="middle" font-size="20" font-weight="650">Cone perception node</text><text x="575" y="284" text-anchor="middle" class="muted" font-size="15">HSV / stereo pipeline</text><text x="575" y="307" text-anchor="middle" class="mono muted" font-size="13">stereo_cone_node</text>
+  <path d="M720 255C775 255 775 255 830 255" fill="none" stroke="#54d5dc" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M720 289C775 289 775 595 830 595" fill="none" stroke="#54d5dc" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="850" y="204" width="670" height="330" rx="20" class="card"/>
+  <text x="888" y="247" class="tag">IMAGE-SPACE OUTPUT</text>
+  <text x="888" y="281" class="mono" font-size="18" font-weight="650">/perception/cone_detections</text>
+  <text x="888" y="308" class="mono type" font-size="15">fsd_msgs/ConeDetection2DArray</text>
+  <line x1="888" y1="329" x2="1482" y2="329" stroke="#30465c"/>
+  <text x="888" y="360" class="mono key" font-size="15">std_msgs/Header</text><text x="1098" y="360" class="comment mono" font-size="14">header  (source image stamp)</text>
+  <text x="888" y="389" class="mono key" font-size="15">ConeDetection2D[]</text><text x="1098" y="389" class="comment mono" font-size="14">detections</text>
+  <rect x="888" y="410" width="594" height="96" rx="12" fill="#0d1722" stroke="#263c51"/>
+  <text x="910" y="438" class="mono type" font-size="14">ConeDetection2D</text>
+  <text x="910" y="463" class="mono" font-size="13"><tspan class="key">uint8</tspan> color  ·  <tspan class="key">float32</tspan> confidence  ·  <tspan class="key">uint8</tspan> source</text>
+  <text x="910" y="486" class="mono" font-size="13"><tspan class="key">float32</tspan> cx, cy, width, height  <tspan class="comment">(pixel coordinates)</tspan></text>
+  <rect x="850" y="554" width="670" height="374" rx="20" class="card"/>
+  <text x="888" y="597" class="tag">VEHICLE-FRAME OUTPUT</text>
+  <text x="888" y="631" class="mono" font-size="18" font-weight="650">/perception/cones</text>
+  <text x="888" y="658" class="mono type" font-size="15">fsd_msgs/Cone3DArray</text>
+  <line x1="888" y1="679" x2="1482" y2="679" stroke="#30465c"/>
+  <text x="888" y="710" class="mono key" font-size="15">std_msgs/Header</text><text x="1098" y="710" class="comment mono" font-size="14">header  (image stamp, frame_id: base_link)</text>
+  <text x="888" y="739" class="mono key" font-size="15">Cone3D[]</text><text x="1098" y="739" class="comment mono" font-size="14">cones</text>
+  <rect x="888" y="762" width="594" height="137" rx="12" fill="#0d1722" stroke="#263c51"/>
+  <text x="910" y="789" class="mono type" font-size="14">Cone3D</text>
+  <text x="910" y="815" class="mono" font-size="13"><tspan class="key">uint32</tspan> id  ·  <tspan class="key">uint8</tspan> color  ·  <tspan class="key">float32</tspan> confidence</text>
+  <text x="910" y="840" class="mono" font-size="13"><tspan class="key">float32</tspan> x, y, z  <tspan class="comment">(meters; forward, left, up)</tspan></text>
+  <text x="910" y="865" class="mono" font-size="13"><tspan class="key">float32</tspan> depth_sigma  <tspan class="comment">(1-sigma range uncertainty, m)</tspan></text>
+  <rect x="72" y="405" width="648" height="348" rx="20" class="card"/>
+  <text x="108" y="450" class="tag">ENUM VALUES</text>
+  <text x="108" y="490" class="mono" font-size="15"><tspan class="key">COLOR_BLUE</tspan> = 0</text><text x="375" y="490" class="mono" font-size="15"><tspan class="key">COLOR_YELLOW</tspan> = 1</text>
+  <text x="108" y="522" class="mono" font-size="15"><tspan class="key">COLOR_ORANGE_SMALL</tspan> = 2</text>
+  <text x="108" y="554" class="mono" font-size="15"><tspan class="key">COLOR_ORANGE_BIG</tspan> = 3</text>
+  <text x="108" y="586" class="mono" font-size="15"><tspan class="key">COLOR_UNKNOWN</tspan> = 255</text>
+  <line x1="108" y1="612" x2="678" y2="612" stroke="#30465c"/>
+  <text x="108" y="646" class="mono" font-size="15"><tspan class="type">SOURCE_YOLO</tspan> = 0</text><text x="375" y="646" class="mono" font-size="15"><tspan class="type">SOURCE_HSV</tspan> = 1</text>
+  <text x="108" y="695" class="muted" font-size="14">id is temporary per frame; it is not a persistent map ID.</text>
+  <text x="72" y="882" class="muted" font-size="14">Definitions: fsd_ws/src/fsd_msgs/msg/{ConeDetection2D,ConeDetection2DArray,Cone3D,Cone3DArray}.msg</text>
+</svg>

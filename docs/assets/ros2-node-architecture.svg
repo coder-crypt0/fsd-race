@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">ROS 2 autonomous driving node architecture</title>
+  <desc id="desc">ROS 2 nodes and typed topics from simulator sensors through perception, mapping, planning, control, safety, and vehicle actuation.</desc>
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#101a28"/><stop offset="1" stop-color="#0b111b"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#8ba5be"/></marker>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#54d5dc"/></marker>
+    <style>
+      text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#edf3fa}.muted{fill:#97aabd}.small{font-size:15px}.topic{font-size:13px;fill:#a8bdce}.node{fill:#172638;stroke:#3b536b;stroke-width:1.5}.sensor{fill:#202b3a;stroke:#67798b}.accent{fill:#17393d;stroke:#39aeb5}.gold{fill:#39301d;stroke:#ba9144}.purple{fill:#28243b;stroke:#8474bd}.line{fill:none;stroke:#8ba5be;stroke-width:2;marker-end:url(#arrow)}.cyanline{fill:none;stroke:#54d5dc;stroke-width:2.5;marker-end:url(#arrowCyan)}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <text x="72" y="74" font-size="15" font-weight="700" letter-spacing="2.4" fill="#54d5dc">FSDS · ROS 2 HUMBLE</text>
+  <text x="72" y="126" font-size="38" font-weight="700">Autonomy node architecture</text>
+  <text x="72" y="158" class="muted" font-size="17">Each box is an independent ROS 2 process. Arrows show the primary typed topic flow.</text>
+  <rect x="52" y="195" width="1496" height="694" rx="24" fill="#0e1722" stroke="#28394a"/>
+  <text x="82" y="238" class="muted" font-size="14" font-weight="700" letter-spacing="1.7">SIMULATOR INPUTS</text>
+  <rect class="sensor" x="86" y="275" width="205" height="82" rx="14"/><text x="188" y="309" text-anchor="middle" font-size="18" font-weight="650">FSDS bridge</text><text x="188" y="336" text-anchor="middle" class="small muted">sensor + vehicle I/O</text>
+  <rect class="sensor" x="86" y="395" width="205" height="64" rx="13"/><text x="188" y="422" text-anchor="middle" font-size="16">RGB camera</text><text x="188" y="444" text-anchor="middle" class="small muted">/fsds/cam_left/image_color</text>
+  <rect class="sensor" x="86" y="500" width="205" height="64" rx="13"/><text x="188" y="527" text-anchor="middle" font-size="16">IMU + wheel states</text><text x="188" y="549" text-anchor="middle" class="small muted">/imu · /wheel_states</text>
+  <path class="line" d="M188 395V362"/><path class="line" d="M188 500V464"/>
+  <text x="348" y="238" class="muted" font-size="14" font-weight="700" letter-spacing="1.7">PERCEPTION &amp; STATE</text>
+  <rect class="accent" x="350" y="286" width="230" height="92" rx="16"/><text x="465" y="320" text-anchor="middle" font-size="18" font-weight="650">Cone perception</text><text x="465" y="348" text-anchor="middle" class="small muted">stereo_cone_node</text><text x="465" y="367" text-anchor="middle" class="topic">/perception/cones · /cone_detections</text>
+  <rect class="node" x="350" y="476" width="230" height="92" rx="16"/><text x="465" y="511" text-anchor="middle" font-size="18" font-weight="650">State estimation</text><text x="465" y="539" text-anchor="middle" class="small muted">state_estimation_node</text><text x="465" y="558" text-anchor="middle" class="topic">/odometry/filtered</text>
+  <path class="line" d="M291 427C322 427 315 332 350 332"/><path class="line" d="M291 532H350"/>
+  <text x="653" y="238" class="muted" font-size="14" font-weight="700" letter-spacing="1.7">WORLD MODEL &amp; PLANNING</text>
+  <rect class="gold" x="660" y="310" width="230" height="92" rx="16"/><text x="775" y="344" text-anchor="middle" font-size="18" font-weight="650">Cone mapping</text><text x="775" y="372" text-anchor="middle" class="small muted">cone_mapping_node</text><text x="775" y="391" text-anchor="middle" class="topic">/mapping/track · /mapping/status</text>
+  <rect class="accent" x="960" y="310" width="230" height="92" rx="16"/><text x="1075" y="344" text-anchor="middle" font-size="18" font-weight="650">Path planning</text><text x="1075" y="372" text-anchor="middle" class="small muted">path_planning_node</text><text x="1075" y="391" text-anchor="middle" class="topic">/planning/path · /speed_limit</text>
+  <path class="line" d="M580 332H660"/><text x="620" y="319" text-anchor="middle" class="topic">Cone3DArray</text>
+  <path class="line" d="M580 522C626 522 616 377 660 377"/><text x="617" y="477" text-anchor="middle" class="topic">Odometry</text>
+  <path class="line" d="M890 355H960"/><text x="925" y="342" text-anchor="middle" class="topic">ConeMap</text>
+  <path class="line" d="M580 332C760 235 880 245 960 322"/><text x="770" y="264" text-anchor="middle" class="topic">local cones + odometry</text>
+  <path class="line" d="M580 522C790 600 880 554 1014 402"/><text x="800" y="570" text-anchor="middle" class="topic">Odometry</text>
+  <text x="1220" y="238" class="muted" font-size="14" font-weight="700" letter-spacing="1.7">CONTROL &amp; ACTUATION</text>
+  <rect class="purple" x="1220" y="310" width="245" height="92" rx="16"/><text x="1342" y="344" text-anchor="middle" font-size="18" font-weight="650">Motion control</text><text x="1342" y="372" text-anchor="middle" class="small muted">motion_control_node</text><text x="1342" y="391" text-anchor="middle" class="topic">/control/cmd</text>
+  <rect class="sensor" x="1220" y="490" width="245" height="82" rx="16"/><text x="1342" y="523" text-anchor="middle" font-size="18" font-weight="650">Vehicle</text><text x="1342" y="550" text-anchor="middle" class="small muted">FSDS control command</text>
+  <path class="line" d="M1190 355H1220"/><text x="1205" y="342" text-anchor="middle" class="topic">Path + limit</text>
+  <path class="line" d="M1342 402V490"/><text x="1401" y="451" class="topic">/control_command</text>
+  <rect class="node" x="660" y="650" width="230" height="84" rx="16"/><text x="775" y="683" text-anchor="middle" font-size="18" font-weight="650">Safety supervisor</text><text x="775" y="711" text-anchor="middle" class="small muted">health + command checks</text>
+  <path class="line" d="M775 650V402"/><text x="793" y="623" class="topic">heartbeat · odometry · map · cmd</text>
+  <path class="cyanline" d="M890 690C1080 690 1160 650 1342 572"/><text x="1090" y="680" class="topic">/safety/ebs_trigger</text>
+  <rect class="node" x="960" y="770" width="230" height="72" rx="15"/><text x="1075" y="801" text-anchor="middle" font-size="17" font-weight="650">Dashboard</text><text x="1075" y="826" text-anchor="middle" class="small muted">read-only telemetry · :8321</text>
+  <path class="line" d="M775 402C810 630 914 746 960 800"/><path class="line" d="M1075 402V770"/><path class="line" d="M1342 402C1310 640 1230 745 1190 800"/>
+  <line x1="85" y1="802" x2="135" y2="802" stroke="#8ba5be" stroke-width="2" marker-end="url(#arrow)"/><text x="150" y="808" class="small muted">ROS topic</text><line x1="260" y1="802" x2="310" y2="802" stroke="#54d5dc" stroke-width="2.5" marker-end="url(#arrowCyan)"/><text x="325" y="808" class="small muted">safety intervention</text>
+  <text x="82" y="862" class="small muted">Separate processes · reliable control topics · best-effort camera input · diagram follows fsds.launch.py</text>
+</svg>
