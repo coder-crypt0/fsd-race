@@ -35,6 +35,7 @@
 #include <fs_msgs/msg/wheel_states.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 
 using fsd_msgs::msg::VehicleCmd;
 using fsd_msgs::msg::VehicleStatus;
@@ -47,7 +48,7 @@ constexpr double kRpmToRadPerSec = 2.0 * M_PI / 60.0;
 class FsdsAdapterNode : public rclcpp::Node
 {
 public:
-  FsdsAdapterNode() : Node("fsds_adapter")
+  FsdsAdapterNode() : Node("fsds_adapter"), timing_(this)
   {
     declare_parameter<double>("max_steering_rad", 0.35);
     declare_parameter<double>("torque_max_nm", 30.0);
@@ -146,6 +147,7 @@ public:
 private:
   void on_cmd(VehicleCmd::ConstSharedPtr m)
   {
+    fsd::CallbackTimer::Scope timing(timing_, fsd::stamp_to_sec(m->header.stamp));
     fs_msgs::msg::ControlCommand out;
     out.header.stamp = now();
     if (ebs_ || m->emergency_stop || !go_ || finished_) {
@@ -197,6 +199,7 @@ private:
   rclcpp::Publisher<fsd_msgs::msg::WheelSpeeds>::SharedPtr wheels_pub_;
   rclcpp::Publisher<VehicleStatus>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 

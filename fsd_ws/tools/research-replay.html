@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FSDS recorded research replay</title>
+<style>
+  :root{font:15px system-ui;color:#20323d;background:#f5f6f4;color-scheme:light}
+  body{max-width:1200px;margin:24px auto;padding:0 20px}h1{font-size:24px;margin-bottom:4px}
+  p{line-height:1.5;color:#4a5e6c}.controls{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:20px 0}
+  button,input{font:inherit}button{padding:7px 18px}input[type=range]{flex:1;min-width:200px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.wide{grid-column:1/-1}
+  canvas{display:block;width:100%;height:300px;background:white}h2{font-size:16px;font-weight:600}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #d9e0e2}
+  #state{font-variant-numeric:tabular-nums}#error{color:#a53624}@media(max-width:750px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}
+</style>
+<h1>Recorded FSDS research replay</h1>
+<p>Read-only playback of actual evaluation data. No simulator connection or control output.
+Map/path snapshots update only at their recorded cadence; missing data is not invented.</p>
+<label>Evaluation JSON <input id="file" type="file" accept=".json,application/json"></label>
+<div class="controls"><button id="play" disabled>Play</button><label>Time <input id="time" type="range" min="0" max="1" step="0.1" value="0" disabled></label><output id="state">Load a research evaluation</output></div>
+<p id="error" role="alert"></p>
+<div class="grid">
+<section><h2>Estimated map, local path and vehicle heading</h2><canvas id="map" aria-label="Recorded estimated track and vehicle pose"></canvas></section>
+<section><h2>Observed speed · m/s</h2><canvas id="speed" aria-label="Estimated and reference speeds over wall time"></canvas></section>
+<section><h2>Actuation requests · normalized</h2><canvas id="commands" aria-label="Steering, brake and torque requests"></canvas></section>
+<section><h2>Map growth and path length · counts</h2><canvas id="counts" aria-label="Confirmed landmarks and path samples over time"></canvas></section>
+<section class="wide"><h2>Latest sampled callback timing</h2><table><thead><tr><th>Layer</th><th>Execution (ms)</th><th>Input age (ms)</th><th>Report age (s)</th></tr></thead><tbody id="timing"></tbody></table>
+<p>Execution is sampled at up to 5 Hz per layer. Input age is not a causally matched end-to-end response time.
+The reference speed is FSDS physics-time speed; estimated speed uses encoder/wall time.</p></section>
+</div>
+<script>
+'use strict';
+let data=null, playing=false, lastFrame=0;
+const slider=document.getElementById('time'), play=document.getElementById('play');
+const colors=['#257d8e','#985486','#b47819'];
+function setup(id){const c=document.getElementById(id),r=c.getBoundingClientRect(),d=devicePixelRatio||1;c.width=r.width*d;c.height=300*d;const g=c.getContext('2d');g.scale(d,d);g.font='11px system-ui';g.fillStyle='#243d4d';return {g,w:r.width,h:300};}
+function linePlot(id,samples,defs,t,ylabel){const {g,w,h}=setup(id),pad=48, vals=[];
+  for(const s of samples)for(const d of defs){const v=d.value(s);if(Number.isFinite(v))vals.push(v);}
+  if(!vals.length)return;let lo=Math.min(0,...vals),hi=Math.max(...vals);if(hi===lo)hi=lo+1;hi+=(hi-lo)*.08;
+  const x=v=>pad+(w-pad-16)*v/data.duration_s,y=v=>h-pad-(h-pad-32)*(v-lo)/(hi-lo);
+  g.strokeStyle='#d6dee1';g.beginPath();g.moveTo(pad,18);g.lineTo(pad,h-pad);g.lineTo(w-16,h-pad);g.stroke();
+  for(let j=0;j<5;j++){const v=lo+(hi-lo)*j/4;g.fillText(v.toFixed(1),3,y(v)+4);g.fillText((data.duration_s*j/4).toFixed(0),x(data.duration_s*j/4)-7,h-pad+18);}
+  g.fillText('Wall time (s)',w/2-30,h-8);g.fillText(ylabel,pad,13);
+  defs.forEach((d,i)=>{g.strokeStyle=colors[i];g.beginPath();let begun=false;for(const s of samples){const v=d.value(s);if(!Number.isFinite(v))continue;if(!begun){g.moveTo(x(s.t),y(v));begun=true;}else g.lineTo(x(s.t),y(v));}g.stroke();g.fillStyle=colors[i];g.fillText(d.name,pad+i*120,30);});
+  g.strokeStyle='#475b63';g.setLineDash([3,3]);g.beginPath();g.moveTo(x(t),35);g.lineTo(x(t),h-pad);g.stroke();g.setLineDash([]);
+}
+function draw(){if(!data)return;const t=+slider.value,history=data.samples.filter(s=>s.t<=t),s=history.at(-1)||data.samples[0];
+  document.getElementById('state').textContent=`${t.toFixed(1)} s · ${s.map_cones||0} map entries · ${s.path_points||0} path points · EBS ${Boolean(s.ebs?.data)}`;
+  const latestMap=history.findLast(s=>s.map)?.map?.cones||[],path=history.findLast(s=>s.path)?.path?.points||[],pose=s.odom;
+  const {g,w,h}=setup('map'),all=[...latestMap,...path,...history.map(s=>s.odom).filter(Boolean)];
+  if(pose&&all.length){let xs=all.map(p=>p.x),ys=all.map(p=>p.y),xmin=Math.min(...xs)-3,xmax=Math.max(...xs)+3,ymin=Math.min(...ys)-3,ymax=Math.max(...ys)+3;
+    const scale=Math.min((w-90)/(xmax-xmin),(h-65)/(ymax-ymin)),x=v=>55+(v-xmin)*scale,y=v=>h-40-(v-ymin)*scale;
+    g.fillText('Startup-frame x / y (m)',12,16);g.fillText(`x: ${xmin.toFixed(0)} to ${xmax.toFixed(0)} m`,55,h-12);
+    for(const c of latestMap){g.fillStyle=c.color===0?'#2879ba':c.color===1?'#bd9300':'#d26630';g.beginPath();g.arc(x(c.x),y(c.y),3,0,Math.PI*2);g.fill();}
+    g.strokeStyle='#3a8061';g.beginPath();path.forEach((p,i)=>i?g.lineTo(x(p.x),y(p.y)):g.moveTo(x(p.x),y(p.y)));g.stroke();
+    const q=pose.q,yaw=Math.atan2(2*(q[3]*q[2]+q[0]*q[1]),1-2*(q[1]**2+q[2]**2));g.strokeStyle='#222';g.lineWidth=2;g.beginPath();g.moveTo(x(pose.x),y(pose.y));g.lineTo(x(pose.x+3*Math.cos(yaw)),y(pose.y+3*Math.sin(yaw)));g.stroke();g.lineWidth=1;
+    g.fillStyle='#243d4d';g.fillText(latestMap.length?'Blue / yellow = estimated cones; green = path':'No map snapshot recorded yet',12,34);
+  }
+  linePlot('speed',data.samples,[{name:'Estimated',value:s=>s.odom?.speed},{name:'Reference',value:s=>s.reference?.speed}],t,'m/s');
+  linePlot('commands',data.samples,[{name:'Steer / 0.35',value:s=>s.control?.steering_angle/.35},{name:'Brake',value:s=>s.control?.brake_cmd},{name:'Torque / 30',value:s=>s.control?.torque_request/30}],t,'Normalized');
+  linePlot('counts',data.samples,[{name:'Map entries',value:s=>s.map_cones},{name:'Path points',value:s=>s.path_points}],t,'Count');
+  const latest={};for(const row of data.research?.callback_timing||[])if(row.t<=t)latest[row.component]=row;
+  const table=document.getElementById('timing');table.replaceChildren();for(const [name,r] of Object.entries(latest)){const tr=document.createElement('tr');for(const value of [name,r.callback_ms.toFixed(3),r.input_age_ms===null?'Not applicable':r.input_age_ms.toFixed(2),(t-r.t).toFixed(2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}
+}
+document.getElementById('file').addEventListener('change',async e=>{try{playing=false;play.textContent='Play';const f=e.target.files[0];if(!f)return;if(f.size>40e6)throw Error('Use a bounded evaluation smaller than 40 MB');const v=JSON.parse(await f.text());if(!Array.isArray(v.samples)||!v.samples.length||!(v.duration_s>0))throw Error('Not an evaluation JSON');data=v;slider.max=v.duration_s;slider.value=0;slider.disabled=false;play.disabled=false;document.getElementById('error').textContent='';draw();}catch(error){document.getElementById('error').textContent=error.message;}});
+slider.addEventListener('input',draw);play.addEventListener('click',()=>{playing=!playing;play.textContent=playing?'Pause':'Play';lastFrame=0;});
+function frame(now){if(playing&&data){if(lastFrame)slider.value=Math.min(data.duration_s,+slider.value+(now-lastFrame)/1000);draw();if(+slider.value>=data.duration_s){playing=false;play.textContent='Play';}}lastFrame=now;requestAnimationFrame(frame);}requestAnimationFrame(frame);
+window.addEventListener('resize',draw);
+</script>
+</html>

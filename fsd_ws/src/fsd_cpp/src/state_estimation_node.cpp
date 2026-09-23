@@ -23,13 +23,14 @@
 #include <fsd_msgs/msg/pose_correction.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 
 using fsd_msgs::msg::PoseCorrection;
 
 class StateEstimationNode : public rclcpp::Node
 {
 public:
-  StateEstimationNode() : Node("state_estimation")
+  StateEstimationNode() : Node("state_estimation"), timing_(this)
   {
     declare_parameter<double>("wheel_radius_m", 0.228);
     declare_parameter<double>("publish_rate_hz", 50.0);
@@ -124,6 +125,7 @@ private:
 
   void step()
   {
+    fsd::CallbackTimer::Scope timing(timing_, -1.0);
     const rclcpp::Time now = this->now();
     const double t = now.seconds();
     if (last_t_ < 0.0) {
@@ -196,6 +198,7 @@ private:
   rclcpp::Subscription<PoseCorrection>::SharedPtr corr_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 

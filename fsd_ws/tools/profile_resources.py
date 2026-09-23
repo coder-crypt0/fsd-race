@@ -44,13 +44,13 @@ def stats(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--seconds', type=int, default=30, choices=range(2, 61))
+    parser.add_argument('--seconds', type=int, default=30, choices=range(2, 901))
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     ticks, pages = os.sysconf('SC_CLK_TCK'), os.sysconf('SC_PAGE_SIZE')
     started_utc = datetime.now(timezone.utc).isoformat()
     before, previous_time = snapshot(), time.monotonic()
-    samples = []
+    samples, sample_times = [], []
     for _ in range(args.seconds):
         time.sleep(1)
         current, current_time = snapshot(), time.monotonic()
@@ -62,6 +62,7 @@ def main():
             item['cpu_percent_one_core'] += 100 * (cpu - before[key][0]) / ticks / (current_time - previous_time)
             item['rss_mib'] += rss * pages / 1048576
         samples.append(row)
+        sample_times.append(time.time())
         before, previous_time = current, current_time
     names = sorted({name for row in samples for name in row})
     if not names:
@@ -70,7 +71,7 @@ def main():
                      for metric in ('cpu_percent_one_core', 'rss_mib')}
                for name in names}
     output = {'started_utc': started_utc, 'recorded_utc': datetime.now(timezone.utc).isoformat(),
-              'samples': samples, 'summary': summary,
+              'samples': samples, 'sample_unix_s': sample_times, 'summary': summary,
               'logical_cpus_visible': os.cpu_count(),
               'cpu_convention': '100% = one logical CPU; excludes unlisted processes',
               'rss_note': 'Resident pages include shared libraries; do not sum as unique physical memory.'}

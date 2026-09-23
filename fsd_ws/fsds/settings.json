@@ -1,5 +1,6 @@
 {
   "SettingsVersion": 1.2,
+  "ApiServerPort": 42500,
   "Vehicles": {
     "FSCar": {
       "DefaultVehicleState": "",

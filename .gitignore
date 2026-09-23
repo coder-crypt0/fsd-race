@@ -1,4 +1,5 @@
 # Private agent context and workstation configuration
+.vscode/
 .claude/
 .codex/
 .agent/

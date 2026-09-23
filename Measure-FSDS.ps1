@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(2, 60)][int]$Seconds = 30,
+    [ValidateRange(2, 900)][int]$Seconds = 30,
     [string]$OutputPath = (Join-Path $PSScriptRoot 'artifacts\windows-resources.json')
 )
 $ErrorActionPreference = 'Stop'

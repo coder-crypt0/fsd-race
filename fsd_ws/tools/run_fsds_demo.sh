@@ -4,12 +4,14 @@ set -Eeuo pipefail
 BUILD=1
 DASHBOARD_PORT=8321
 EVALUATION_SECONDS=0
+RESEARCH=0
 for arg in "$@"; do
   case "$arg" in
     --build) BUILD=1 ;;
     --skip-build) BUILD=0 ;;
     --dashboard-port=*) DASHBOARD_PORT="${arg#*=}" ;;
     --evaluation-seconds=*) EVALUATION_SECONDS="${arg#*=}" ;;
+    --research) RESEARCH=1 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -22,6 +24,7 @@ WS=/root/fsd_ws
 FSDS_REPO=/root/FSDS_repo
 IMAGE=fsd-test:latest
 CONTAINER=fsd-demo
+RPC_PORT=$(python3 -c 'import json; print(json.load(open("/root/fsd_ws/fsds/settings.json")).get("ApiServerPort", 41451))')
 # With `pipefail`, `awk ...; exit` can close the pipe while `ip` is still
 # writing. `ip` then receives SIGPIPE and Bash reports exit 141 before any
 # bridge process starts. Consume the complete input and remember only the
@@ -55,7 +58,7 @@ trap cleanup EXIT
 trap "exit 130" INT
 trap "exit 143" TERM
 
-echo "FSDS host: $HOST_IP:41451"
+echo "FSDS host: $HOST_IP:$RPC_PORT"
 echo "Logs:      $LOG_DIR"
 echo "Dashboard: http://localhost:$DASHBOARD_PORT"
 
@@ -63,9 +66,11 @@ docker run --name "$CONTAINER" --rm --net=host \
   --ulimit core=0 \
   -e FSD_BUILD="$BUILD" \
   -e FSD_HOST_IP="$HOST_IP" \
+  -e FSD_RPC_PORT="$RPC_PORT" \
   -e FSD_LOG_DIR="/ws/demo_logs/$STAMP" \
   -e FSD_DASHBOARD_PORT="$DASHBOARD_PORT" \
   -e FSD_EVALUATION_SECONDS="$EVALUATION_SECONDS" \
+  -e FSD_RESEARCH="$RESEARCH" \
   -v "$WS:/ws" \
   -v "$FSDS_REPO:/fsds:ro" \
   "$IMAGE" bash -lc '
@@ -86,17 +91,22 @@ fi
 source /fsds/ros2/install/setup.bash
 source /ws/install/setup.bash
 
+mark_phase() {
+  printf "{\"event\":\"%s\",\"unix_s\":%s}\n" "$1" "$(date +%s.%N)" >>"$FSD_LOG_DIR/startup.ndjson"
+}
+mark_phase overlays_ready
+
 mkdir -p /root/Formula-Student-Driverless-Simulator
 cp /ws/fsds/settings.json /root/Formula-Student-Driverless-Simulator/settings.json
 
 cleanup_inner() {
   # Background jobs may inherit SIGINT ignored from Bash. Each launcher owns
   # a separate process group so TERM also reaches its nodes; cleanup is bounded.
-  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}"; do
+  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}" "${PROFILE_PID:-}"; do
     [[ -n "$pid" ]] && kill -TERM -- "-$pid" 2>/dev/null || true
   done
   sleep 2
-  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}"; do
+  for pid in "${STACK_PID:-}" "${BRIDGE_PID:-}" "${EVAL_PID:-}" "${PROFILE_PID:-}"; do
     [[ -n "$pid" ]] && kill -KILL -- "-$pid" 2>/dev/null || true
   done
 }
@@ -105,6 +115,7 @@ trap "exit 130" INT
 trap "exit 143" TERM
 
 echo "[2/4] Starting the FSDS ROS bridge..."
+mark_phase bridge_launch
 setsid ros2 launch fsds_ros2_bridge fsds_ros2_bridge.launch.py host:="$FSD_HOST_IP" \
   >"$FSD_LOG_DIR/bridge.log" 2>&1 &
 BRIDGE_PID=$!
@@ -132,12 +143,26 @@ if ! timeout 15 ros2 topic echo /fsds/cam_left/image_color --once \
 fi
 
 echo "[3/4] Starting perception, mapping, planning, control, safety, and dashboard..."
+mark_phase camera_verified
+EVAL_EXTRA=()
+TIMING=false
+if [[ "$FSD_RESEARCH" == 1 ]]; then
+  EVAL_EXTRA=(--research)
+  TIMING=true
+  PROFILE_SECONDS=$(( FSD_EVALUATION_SECONDS / 2 ))
+  (( PROFILE_SECONDS > 120 )) && PROFILE_SECONDS=120
+  (( PROFILE_SECONDS < 2 )) && PROFILE_SECONDS=2
+  setsid python3 /ws/tools/profile_resources.py --seconds "$PROFILE_SECONDS" \
+    --output "$FSD_LOG_DIR/linux-resources.json" >"$FSD_LOG_DIR/resources.log" 2>&1 &
+  PROFILE_PID=$!
+fi
 if (( FSD_EVALUATION_SECONDS > 0 )); then
   setsid python3 /ws/tools/evaluate_fsds.py --seconds "$FSD_EVALUATION_SECONDS" \
-    --output "$FSD_LOG_DIR/evaluation.json" >"$FSD_LOG_DIR/evaluation.log" 2>&1 &
+    --output "$FSD_LOG_DIR/evaluation.json" "${EVAL_EXTRA[@]}" >"$FSD_LOG_DIR/evaluation.log" 2>&1 &
   EVAL_PID=$!
 fi
-setsid ros2 launch fsd_cpp fsds.launch.py >"$FSD_LOG_DIR/stack.log" 2>&1 &
+mark_phase stack_launch
+setsid ros2 launch fsd_cpp fsds.launch.py enable_timing:="$TIMING" >"$FSD_LOG_DIR/stack.log" 2>&1 &
 STACK_PID=$!
 
 for _ in $(seq 1 40); do
@@ -146,6 +171,7 @@ for _ in $(seq 1 40); do
 done
 
 echo "[4/4] Demo is live. The vehicle starts autonomously; no GO click is required."
+mark_phase dashboard_ready
 echo "       Dashboard: http://localhost:$FSD_DASHBOARD_PORT"
 echo "       Ctrl+C stops everything cleanly."
 

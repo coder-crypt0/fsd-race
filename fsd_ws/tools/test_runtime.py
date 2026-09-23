@@ -23,6 +23,7 @@ import numpy as np
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--frame', help='Optional captured stationary FSDS start image')
+    parser.add_argument('--timing', action='store_true', help='Also exercise opt-in callback diagnostics')
     args = parser.parse_args()
     rclpy.init()
     node = rclpy.create_node('runtime_regression')
@@ -35,6 +36,12 @@ def main():
     path_sub = node.create_subscription(PathPointArray, '/planning/path', paths.append, 5)
     cmd_sub = node.create_subscription(VehicleCmd, '/control/cmd', commands.append, 5)
     processes = []
+    timing_rows = []
+    if args.timing:
+        from fsd_msgs.msg import CallbackTiming
+        from rclpy.qos import qos_profile_sensor_data
+        timing_sub = node.create_subscription(CallbackTiming, '/diagnostics/callback_timing',
+                                             timing_rows.append, qos_profile_sensor_data)
 
     def drive(seconds, cones=None, path=None):
         end = time.monotonic() + seconds
@@ -58,9 +65,12 @@ def main():
             time.sleep(0.01)
 
     def launch(name):
-        p = subprocess.Popen([binary + name, '--ros-args', '-p',
-                              'local_cache_timeout_s:=0.2'] if name == 'path_planning_node'
-                             else [binary + name], stdout=subprocess.DEVNULL)
+        command = [binary + name, '--ros-args']
+        if name == 'path_planning_node':
+            command += ['-p', 'local_cache_timeout_s:=0.2']
+        if args.timing:
+            command += ['-p', 'enable_timing:=true']
+        p = subprocess.Popen(command, stdout=subprocess.DEVNULL)
         processes.append(p)
         return p
 
@@ -208,6 +218,11 @@ def main():
             assert any(c.color == 1 and abs(c.x-9.44) < .8 and abs(c.y+1.97) < .4 for c in cones)
             assert all(c.y > 0 for c in cones if c.color == 0), 'False blue cone in start corridor'
             print('PASS: captured FSDS start frame detects both boundaries with plausible range')
+        if args.timing:
+            assert timing_rows, 'No callback timing diagnostics received'
+            assert all(math.isfinite(t.callback_ms) and t.callback_ms >= 0 for t in timing_rows)
+            assert {'path_planning', 'motion_control'}.issubset({t.component for t in timing_rows})
+            print('PASS: opt-in timing publishes finite durations without changing regression outcomes')
     finally:
         for process in processes:
             if process.poll() is None:

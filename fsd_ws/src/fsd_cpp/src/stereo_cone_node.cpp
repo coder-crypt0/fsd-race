@@ -36,6 +36,7 @@
 #include <fsd_msgs/msg/heartbeat.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 #include "fsd_cpp/hsv_thresholds.hpp"
 #ifdef FSD_USE_CUDA
 #include "fsd_cpp/segmentation.hpp"
@@ -67,7 +68,7 @@ double cone_height_for(uint8_t color)
 class StereoConeNode : public rclcpp::Node
 {
 public:
-  StereoConeNode() : Node("stereo_cone")
+  StereoConeNode() : Node("stereo_cone"), timing_(this)
   {
     declare_parameter<double>("fx", 320.0);
     declare_parameter<double>("fy", 320.0);
@@ -244,6 +245,7 @@ private:
 
   void on_image(sensor_msgs::msg::Image::ConstSharedPtr msg, size_t cam_idx)
   {
+    fsd::CallbackTimer::Scope timing(timing_, fsd::stamp_to_sec(msg->header.stamp));
     const Cam & cam = cams_[cam_idx];
     auto cvp = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
     const cv::Mat & frame = cvp->image;
@@ -561,6 +563,7 @@ private:
   rclcpp::Publisher<fsd_msgs::msg::Cone3DArray>::SharedPtr cones_pub_;
   rclcpp::Publisher<fsd_msgs::msg::ConeDetection2DArray>::SharedPtr dets_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr right_sub_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 

@@ -47,6 +47,7 @@
 #include <fsd_msgs/msg/heartbeat.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 
 using fsd_msgs::msg::ConeDetection2D;
 using fsd_msgs::msg::ConeMapEntry;
@@ -518,7 +519,7 @@ std::vector<Sample> apply_offsets(
 class PathPlanningNode : public rclcpp::Node
 {
 public:
-  PathPlanningNode() : Node("path_planning")
+  PathPlanningNode() : Node("path_planning"), timing_(this)
   {
     declare_parameter<double>("window_ahead_m", 25.0);
     declare_parameter<double>("window_behind_m", 5.0);
@@ -797,6 +798,7 @@ private:
 
   void plan()
   {
+    fsd::CallbackTimer::Scope timing(timing_, local_cones_ ? fsd::stamp_to_sec(local_cones_->header.stamp) : -1.0);
     const double t = now().seconds();
     auto path = compute();
     if (path) {
@@ -1681,6 +1683,7 @@ private:
   rclcpp::Publisher<PathPointArray>::SharedPtr pub_;
   rclcpp::Publisher<SpeedLimit>::SharedPtr cap_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 

@@ -48,6 +48,7 @@
 #include <fsd_msgs/msg/track_status.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 
 using fsd_msgs::msg::ConeMapEntry;
 using fsd_msgs::msg::PoseCorrection;
@@ -379,7 +380,7 @@ private:
 class ConeMappingNode : public rclcpp::Node
 {
 public:
-  ConeMappingNode() : Node("cone_mapping")
+  ConeMappingNode() : Node("cone_mapping"), timing_(this)
   {
     declare_parameter<double>("search_radius_m", 1.2);
     declare_parameter<double>("gate_threshold_m", 0.5);
@@ -484,6 +485,7 @@ private:
 
   void on_cones(fsd_msgs::msg::Cone3DArray::ConstSharedPtr msg)
   {
+    fsd::CallbackTimer::Scope timing(timing_, fsd::stamp_to_sec(msg->header.stamp));
     const auto pose = poses_.query(fsd::stamp_to_sec(msg->header.stamp));
     if (!pose) {
       return;
@@ -679,6 +681,7 @@ private:
   rclcpp::Publisher<TrackStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<PoseCorrection>::SharedPtr corr_pub_;
   rclcpp::TimerBase::SharedPtr timer_, compact_timer_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 

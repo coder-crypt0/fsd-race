@@ -11,10 +11,13 @@ import msgpack
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True)
+    parser.add_argument('--port', type=int, default=42500)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     result = {}
-    with socket.create_connection((args.host, 41451), timeout=5) as conn:
+    if not 1 <= args.port <= 65535:
+        parser.error('--port must be between 1 and 65535')
+    with socket.create_connection((args.host, args.port), timeout=5) as conn:
         unpacker = msgpack.Unpacker(raw=False)
         for i, (method, params) in enumerate([
             ('getRefereeState', []), ('simGetCameraInfo', ['cam_left', 'FSCar']),

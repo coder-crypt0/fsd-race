@@ -29,6 +29,7 @@
 #include <fsd_msgs/msg/heartbeat.hpp>
 
 #include "fsd_cpp/common.hpp"
+#include "fsd_cpp/timing.hpp"
 
 using fsd_msgs::msg::Heartbeat;
 using fsd_msgs::msg::SpeedLimit;
@@ -38,7 +39,7 @@ using fsd_msgs::msg::VehicleStatus;
 class MotionControlNode : public rclcpp::Node
 {
 public:
-  MotionControlNode() : Node("motion_control")
+  MotionControlNode() : Node("motion_control"), timing_(this)
   {
     declare_parameter<double>("wheelbase_m", 1.53);
     declare_parameter<double>("max_steering_rad", 0.35);
@@ -192,6 +193,7 @@ private:
 
   void tick()
   {
+    fsd::CallbackTimer::Scope timing(timing_, path_t_);
     const double t = now().seconds();
     VehicleCmd cmd;
     cmd.header.stamp = now();
@@ -346,6 +348,7 @@ private:
   rclcpp::Subscription<SpeedLimit>::SharedPtr cap_sub_;
   rclcpp::Publisher<VehicleCmd>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  fsd::CallbackTimer timing_;
   std::unique_ptr<fsd::HeartbeatEmitter> hb_;
 };
 
