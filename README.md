@@ -69,6 +69,11 @@ The car starts automatically in **FSDS TrainingMap**. The dashboard opens at
 [localhost:8321](http://localhost:8321). Ctrl+C stops the demo; `-KeepSimulator`
 keeps the simulator open on exit. Use `run.ps1` after C++ changes.
 
+If Windows reserves the configured FSDS RPC port, the launcher selects an
+available port in 42000–42999 for that run and passes it to both FSDS and the
+ROS bridge. It does not require administrator access or change Windows port
+reservations. The selected port is printed at startup.
+
 The launcher deliberately restarts existing FSDS processes for a fresh spawn.
 Logs and evaluation JSON are copied to `fsd_ws/demo_logs`; timestamped originals
 remain in WSL. Exit code zero means the process ran successfully—not that a

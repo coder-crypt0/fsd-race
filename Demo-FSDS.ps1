@@ -38,34 +38,50 @@ if (-not (Test-Path -LiteralPath $simulatorExe)) {
 if (-not (Test-Path -LiteralPath $settingsSource)) {
     throw "FSDS settings were not found at '$settingsSource'."
 }
-$rpcPort = (Get-Content -LiteralPath $settingsSource -Raw | ConvertFrom-Json).ApiServerPort
-if (-not $rpcPort) { $rpcPort = 41451 }
-if ($rpcPort -lt 1 -or $rpcPort -gt 65535) { throw 'Invalid ApiServerPort in FSDS settings.' }
+$settings = Get-Content -LiteralPath $settingsSource -Raw | ConvertFrom-Json
+$configuredRpcPort = $settings.ApiServerPort
+if (-not $configuredRpcPort) { $configuredRpcPort = 41451 }
+if ($configuredRpcPort -lt 1 -or $configuredRpcPort -gt 65535) { throw 'Invalid ApiServerPort in FSDS settings.' }
+
+function Test-RpcPortAvailable([int]$Port) {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $Port)
+    try {
+        $listener.Start()
+        return $true
+    } catch [Net.Sockets.SocketException] {
+        return $false
+    } finally {
+        $listener.Stop()
+    }
+}
 
 $freeGb = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
 Write-Host "FSD demo starting (C: free: $freeGb GB)" -ForegroundColor Cyan
 Write-Host 'Ctrl+C stops the ROS stack. The simulator is also stopped unless -KeepSimulator was supplied.'
 
-# FSDS reads settings from this fixed user-directory name, not from the binary folder.
-New-Item -ItemType Directory -Path $settingsTargetDir -Force | Out-Null
-Copy-Item -LiteralPath $settingsSource -Destination $settingsTarget -Force
-# This FSDS binary also accepts settings beside FSDS.exe. A stale file here
-# previously enabled 2x 785px cameras and two lidars, overloading the simulator
-# until both ROS bridge RPC calls timed out. Keep both lookup locations equal.
-Copy-Item -LiteralPath $settingsSource -Destination $binarySettingsTarget -Force
-
 # Always use a fresh vehicle spawn. Reusing an old AirSim process preserves the
 # previous crash/EBS location and makes a healthy stack appear broken.
 Stop-FsdsProcesses
 Start-Sleep -Seconds 2
-$portProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $rpcPort)
-try {
-    $portProbe.Start()
-} catch {
-    throw "FSDS cannot bind RPC port $rpcPort. Check netsh interface ipv4 show excludedportrange protocol=tcp. Choose a free ApiServerPort; do not delete Windows reservations."
-} finally {
-    $portProbe.Stop()
+$rpcPort = $null
+foreach ($candidate in @($configuredRpcPort) + @(42000..42999)) {
+    if (Test-RpcPortAvailable $candidate) {
+        $rpcPort = $candidate
+        break
+    }
 }
+if (-not $rpcPort) { throw 'No bindable FSDS RPC port found in the configured port or fallback range 42000-42999.' }
+if ($rpcPort -ne $configuredRpcPort) {
+    Write-Host "RPC port $configuredRpcPort is unavailable (possibly reserved by Windows); using $rpcPort for this run." -ForegroundColor Yellow
+}
+
+# FSDS reads settings from this fixed user-directory name. Keep the binary-folder
+# copy equal, but leave the checked-in settings unchanged for the next launch.
+$settings | Add-Member -NotePropertyName ApiServerPort -NotePropertyValue $rpcPort -Force
+$runtimeSettings = $settings | ConvertTo-Json -Depth 32
+New-Item -ItemType Directory -Path $settingsTargetDir -Force | Out-Null
+[IO.File]::WriteAllText($settingsTarget, $runtimeSettings, [Text.UTF8Encoding]::new($false))
+Copy-Item -LiteralPath $settingsTarget -Destination $binarySettingsTarget -Force
 Start-Process -FilePath $simulatorExe -ArgumentList @(
     '/Game/TrainingMap?listen', '-WINDOWED', '-ResX=960', '-ResY=540'
 ) | Out-Null
@@ -113,6 +129,7 @@ $buildArg = if ($SkipBuild) { '--skip-build' } else { '--build' }
 $portArg = "--dashboard-port=$DashboardPort"
 $evaluationArg = "--evaluation-seconds=$EvaluationSeconds"
 $runnerArgs = @($buildArg, $portArg, $evaluationArg)
+$runnerArgs += "--rpc-port=$rpcPort"
 if ($Research) { $runnerArgs += '--research' }
 $browserJob = $null
 $resourceJob = $null

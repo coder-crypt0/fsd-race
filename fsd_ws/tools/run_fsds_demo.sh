@@ -5,11 +5,13 @@ BUILD=1
 DASHBOARD_PORT=8321
 EVALUATION_SECONDS=0
 RESEARCH=0
+RPC_PORT=
 for arg in "$@"; do
   case "$arg" in
     --build) BUILD=1 ;;
     --skip-build) BUILD=0 ;;
     --dashboard-port=*) DASHBOARD_PORT="${arg#*=}" ;;
+    --rpc-port=*) RPC_PORT="${arg#*=}" ;;
     --evaluation-seconds=*) EVALUATION_SECONDS="${arg#*=}" ;;
     --research) RESEARCH=1 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
@@ -24,7 +26,13 @@ WS=/root/fsd_ws
 FSDS_REPO=/root/FSDS_repo
 IMAGE=fsd-test:latest
 CONTAINER=fsd-demo
-RPC_PORT=$(python3 -c 'import json; print(json.load(open("/root/fsd_ws/fsds/settings.json")).get("ApiServerPort", 41451))')
+if [[ -z "$RPC_PORT" ]]; then
+  RPC_PORT=$(python3 -c 'import json; print(json.load(open("/root/fsd_ws/fsds/settings.json")).get("ApiServerPort", 41451))')
+fi
+if [[ ! "$RPC_PORT" =~ ^[0-9]+$ ]] || (( RPC_PORT < 1 || RPC_PORT > 65535 )); then
+  echo "RPC port must be an integer from 1 to 65535." >&2
+  exit 2
+fi
 # With `pipefail`, `awk ...; exit` can close the pipe while `ip` is still
 # writing. `ip` then receives SIGPIPE and Bash reports exit 141 before any
 # bridge process starts. Consume the complete input and remember only the

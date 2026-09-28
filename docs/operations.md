@@ -15,7 +15,7 @@ The root PowerShell launcher is currently workstation-specific:
 | WSL source workspace | `/root/fsd_ws` |
 | External FSDS bridge | `/root/FSDS_repo/ros2/install` |
 | Container mounts | Workspace → `/ws`; external bridge repo → `/fsds` read-only |
-| Network | WSL-to-Windows RPC port 41451; dashboard port 8321 |
+| Network | WSL-to-Windows RPC port from `fsd_ws/fsds/settings.json` (automatic fallback to 42000–42999); dashboard port 8321 |
 | Disk | Space for existing simulator/image/build plus bounded logs; no automated cache deletion |
 
 The image and prebuilt bridge are local dependencies, not downloadable releases
@@ -47,9 +47,9 @@ From PowerShell at the repository root:
 
 Choose one command, not concurrent instances. All launches:
 
-1. Copy the single-camera settings to both the FSDS binary folder and the
-   fixed user configuration directory.
-2. Restart existing Blocks/FSDS processes to obtain a fresh spawn.
+1. Restart existing Blocks/FSDS processes to obtain a fresh spawn.
+2. Probe the configured RPC port, select a free fallback if Windows reserves it,
+   and copy matching single-camera settings to both FSDS locations.
 3. Wait for RPC, synchronize source/config/tools into ext4, preserve build/install.
 4. Build unless SkipBuild is requested and an install exists.
 5. Start the bridge and require an actual image, not merely a registered topic.
@@ -160,7 +160,7 @@ captured stationary start frame; that image is not bundled.
 |---|---|
 | Launcher exit 141 before bridge startup | Use updated runner; old early-exit awk caused SIGPIPE with pipefail |
 | Exit 1 | Read first actual failure in bridge/stack/build log, not just PowerShell's wrapper exception |
-| RPC not available | Verify FSDS started, port 41451, Windows/WSL connectivity and firewall |
+| RPC not available | Check the selected RPC port printed by the launcher, FSDS startup, Windows/WSL connectivity and firewall |
 | Camera topic exists but no image arrives | Inspect camera RPC errors and both settings-file locations |
 | Camera underground | Keep FSDS mount Z positive; verify source frame before calibration changes |
 | No yellow / sky as blue | Check recorded image, exposure, calibration and HSV/geometry gates; not only map output |
