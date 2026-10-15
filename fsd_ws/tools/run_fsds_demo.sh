@@ -124,7 +124,7 @@ trap "exit 143" TERM
 
 echo "[2/4] Starting the FSDS ROS bridge..."
 mark_phase bridge_launch
-setsid ros2 launch fsds_ros2_bridge fsds_ros2_bridge.launch.py host:="$FSD_HOST_IP" \
+setsid ros2 launch /ws/src/fsd_cpp/launch/bridge.launch.py host:="$FSD_HOST_IP" \
   >"$FSD_LOG_DIR/bridge.log" 2>&1 &
 BRIDGE_PID=$!
 

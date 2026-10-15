@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +50,7 @@
 
 #include "fsd_cpp/common.hpp"
 #include "fsd_cpp/timing.hpp"
+#include "fsd_cpp/landmark_geometry.hpp"
 
 using fsd_msgs::msg::ConeMapEntry;
 using fsd_msgs::msg::PoseCorrection;
@@ -68,6 +70,8 @@ struct Landmark
   std::array<uint32_t, 3> side_votes{};      // indexed by side enum
   uint32_t obs_count{1};
   double first_seen, last_seen;
+  std::vector<fsd_mapping::Ray> rays;
+  bool triangulated{false};
 
   Landmark(double px, double py, double v, uint8_t color, uint8_t side, double t)
   : x(px), y(py), var(v), first_seen(t), last_seen(t)
@@ -173,7 +177,8 @@ public:
 private:
   static int64_t pack(int ix, int iy)
   {
-    return (static_cast<int64_t>(ix) << 32) | static_cast<uint32_t>(iy);
+    return static_cast<int64_t>((static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
+                                static_cast<uint32_t>(iy));
   }
 
   double cell_;
@@ -413,6 +418,13 @@ public:
     declare_parameter<double>("min_lap_distance_m", 20.0);
     declare_parameter<double>("start_corridor_m", 6.0);
     declare_parameter<int>("laps_to_known", 1);
+    declare_parameter<bool>("freeze_after_lap", true);
+    declare_parameter<bool>("triangulation_enable", true);
+    declare_parameter<double>("camera_offset_x", 1.0);
+    declare_parameter<double>("camera_offset_y", 0.0);
+    declare_parameter<double>("localize_max_rms_m", 0.35);
+    declare_parameter<bool>("localize_while_mapping", false);
+    declare_parameter<bool>("localize_fix_heading", true);
 
     search_r_ = get_parameter("search_radius_m").as_double();
     gate_ = get_parameter("gate_threshold_m").as_double();
@@ -433,6 +445,13 @@ public:
       static_cast<uint32_t>(get_parameter("laps_to_known").as_int());
     laps_ = LapCounter(get_parameter("min_lap_distance_m").as_double(),
                        get_parameter("start_corridor_m").as_double());
+    freeze_after_lap_ = get_parameter("freeze_after_lap").as_bool();
+    triangulation_enable_ = get_parameter("triangulation_enable").as_bool();
+    camera_x_ = get_parameter("camera_offset_x").as_double();
+    camera_y_ = get_parameter("camera_offset_y").as_double();
+    max_loc_rms_ = get_parameter("localize_max_rms_m").as_double();
+    localize_while_mapping_ = get_parameter("localize_while_mapping").as_bool();
+    fix_heading_ = get_parameter("localize_fix_heading").as_bool();
 
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "/odometry/filtered", fsd::qos_reliable(10),
@@ -476,6 +495,9 @@ private:
     }
     last_odom_t_ = t;
     if (laps_.update(x, y, yaw, dist_)) {
+      if (freeze_after_lap_ && !frozen_ && laps_.laps() >= laps_to_known_) {
+        freeze_map();
+      }
       RCLCPP_INFO(get_logger(), "lap %u complete: %.1f m%s", laps_.laps(),
                   laps_.track_length(),
                   laps_.laps() >= laps_to_known_
@@ -492,30 +514,30 @@ private:
     }
     double px = pose->x, py = pose->y, pyaw = pose->yaw;
 
-    // Map-relative localization, BEFORE the map is updated with this frame:
-    // the fit must be against landmarks the frame did not create.
-    if (loc_enable_ && confirmed_count_ >= loc_min_landmarks_ &&
+    if (msg->header.frame_id != "base_link" ||
+        now().seconds() - fsd::stamp_to_sec(msg->header.stamp) > 0.5) { return; }
+    std::vector<fsd_mapping::Observation> observations;
+    for (const auto & d : msg->cones) {
+      if (std::isfinite(d.x+d.y+d.depth_sigma) && d.x>0.25 && d.depth_sigma>=0.0) {
+        observations.push_back({d.x,d.y,d.depth_sigma,d.color});
+      }
+    }
+    std::vector<fsd_mapping::Target> targets;
+    for (const auto & lm : slots_) {
+      if (lm.state==LmState::CONFIRMED && lm.obs_count>=loc_min_obs_ && lm.best_color()<=1) {
+        targets.push_back({lm.id,lm.x,lm.y,lm.best_color()});
+      }
+    }
+    localization_valid_=false;
+    loc_inliers_=0;
+    matched_cones_=0;
+    correspondence_ratio_=0.0;
+    // Register to existing, color-compatible unique IDs before mutating the map.
+    if (loc_enable_ && (frozen_ || localize_while_mapping_) && confirmed_count_ >= loc_min_landmarks_ &&
         msg->cones.size() >= icp_.min_inliers)
     {
-      std::vector<std::pair<double, double>> dets;
-      dets.reserve(msg->cones.size());
-      for (const auto & d : msg->cones) {
-        dets.emplace_back(d.x, d.y);
-      }
-      const auto fix = solve_pose_correction(
-        px, py, pyaw, dets,
-        [this](double x, double y, double r) {
-          std::vector<std::pair<double, double>> out;
-          for (size_t s : grid_confirmed_.query(slots_, x, y, r)) {
-            if (slots_[s].state == LmState::CONFIRMED &&
-                slots_[s].obs_count >= loc_min_obs_)
-            {
-              out.emplace_back(slots_[s].x, slots_[s].y);
-            }
-          }
-          return out;
-        },
-        icp_);
+      const auto fix = fsd_mapping::register_frame(observations,targets,px,py,pyaw,
+                                                   icp_.gate,icp_.min_inliers,max_loc_rms_,fix_heading_);
 
       PoseCorrection out;
       out.header.stamp = now();
@@ -525,10 +547,14 @@ private:
         out.dx = static_cast<float>(fix.dx);
         out.dy = static_cast<float>(fix.dy);
         out.dyaw = static_cast<float>(fix.dyaw);
-        out.n_inliers = static_cast<uint16_t>(std::min<uint32_t>(fix.n_inliers, 65535));
+        out.n_inliers = static_cast<uint16_t>(std::min<size_t>(fix.matches.size(), 65535));
         out.rms_m = static_cast<float>(fix.rms);
-        loc_inliers_ = fix.n_inliers;
+        loc_inliers_ = fix.matches.size();
         loc_rms_ = fix.rms;
+        localization_valid_=true;
+        last_localization_t_=now().seconds();
+        matched_cones_=fix.matches.size();
+        correspondence_ratio_=static_cast<double>(matched_cones_)/std::max<size_t>(1,observations.size());
         // Use the corrected pose for THIS frame's association too — the
         // correction is measured now, and waiting a cycle only feeds the map a
         // pose we already know is off.
@@ -542,11 +568,19 @@ private:
       corr_pub_->publish(out);
     }
 
+    if (frozen_) {
+      // No spawn, promotion, coordinate updates or ID changes after map closure.
+      // A rejected correspondence is an unlocalized frame, never a new landmark.
+      return;
+    }
+
     const double cos_y = std::cos(pyaw);
     const double sin_y = std::sin(pyaw);
     const double t = now().seconds();
 
+    std::set<size_t> used_slots;
     for (const auto & d : msg->cones) {
+      if (!std::isfinite(d.x+d.y+d.depth_sigma) || d.x<=0.25 || d.depth_sigma<0.0) { continue; }
       const double ox = px + d.x * cos_y - d.y * sin_y;
       const double oy = py + d.x * sin_y + d.y * cos_y;
       const double sigma = std::max<double>(d.depth_sigma, 0.05);
@@ -556,14 +590,18 @@ private:
                                    : ConeMapEntry::SIDE_RIGHT;
 
       // 1. confirmed map first
-      if (auto s = best_match(grid_confirmed_, LmState::CONFIRMED, ox, oy, gate)) {
+      if (auto s = best_match(grid_confirmed_, LmState::CONFIRMED, ox, oy, gate, d.color, used_slots)) {
+        used_slots.insert(*s);
         kalman_update_slot(*s, ox, oy, meas_var, d.color, side, t);
+        refine_bearings(*s,px,py,pyaw,d.x,d.y);
         continue;
       }
       // 2. tentative buffer
-      if (auto s = best_match(grid_tentative_, LmState::TENTATIVE, ox, oy, gate)) {
+      if (auto s = best_match(grid_tentative_, LmState::TENTATIVE, ox, oy, gate, d.color, used_slots)) {
+        used_slots.insert(*s);
         Landmark & lm = slots_[*s];
         kalman_update_slot(*s, ox, oy, meas_var, d.color, side, t);
+        refine_bearings(*s,px,py,pyaw,d.x,d.y);
         if (lm.obs_count >= n_confirm_) {
           lm.id = next_id_++;
           lm.state = LmState::CONFIRMED;                // no erase — state flip
@@ -573,6 +611,8 @@ private:
       } else if (meas_var <= max_spawn_var_) {
         slots_.emplace_back(ox, oy, meas_var, d.color, side, t);
         grid_tentative_.insert(slots_.size() - 1, ox, oy);
+        used_slots.insert(slots_.size()-1);
+        refine_bearings(slots_.size()-1,px,py,pyaw,d.x,d.y);
       }
     }
 
@@ -600,12 +640,13 @@ private:
   }
 
   std::optional<size_t> best_match(const GridIndex & grid, LmState want,
-                                   double x, double y, double gate) const
+                                   double x, double y, double gate, uint8_t color,
+                                   const std::set<size_t> & used) const
   {
     std::optional<size_t> best;
     double best_d2 = gate * gate;
     for (size_t s : grid.query(slots_, x, y, std::max(search_r_, gate))) {
-      if (slots_[s].state != want) {
+      if (slots_[s].state != want || used.count(s) || slots_[s].best_color()!=color) {
         continue;                    // lazy deletion / stale-entry filter
       }
       const double dx = slots_[s].x - x;
@@ -617,6 +658,47 @@ private:
       }
     }
     return best;
+  }
+
+  void refine_bearings(size_t slot, double px, double py, double yaw, double bx, double by)
+  {
+    if (!triangulation_enable_) { return; }
+    auto & lm=slots_[slot];
+    const double co=std::cos(yaw), si=std::sin(yaw);
+    const double cx=px+co*camera_x_-si*camera_y_, cy=py+si*camera_x_+co*camera_y_;
+    const double length=std::hypot(bx-camera_x_,by-camera_y_);
+    if (length<0.5) { return; }
+    if (!lm.rays.empty() && std::hypot(cx-lm.rays.back().x,cy-lm.rays.back().y)<0.2) { return; }
+    const double dx=(bx-camera_x_)/length, dy=(by-camera_y_)/length;
+    lm.rays.push_back({cx,cy,co*dx-si*dy,si*dx+co*dy});
+    if (lm.rays.size()>8) { lm.rays.erase(lm.rays.begin()); }
+    const auto point=fsd_mapping::triangulate(lm.rays);
+    if (!point || std::hypot(point->x-lm.x,point->y-lm.y)>0.6) { return; }
+    const auto old_key=grid_confirmed_.key_of(lm.x,lm.y);
+    const double gain=std::min(0.25,lm.var/(lm.var+point->sigma*point->sigma));
+    lm.x+=gain*(point->x-lm.x); lm.y+=gain*(point->y-lm.y);
+    if (!lm.triangulated) { lm.triangulated=true; ++triangulated_cones_; }
+    GridIndex & grid=lm.state==LmState::CONFIRMED ? grid_confirmed_ : grid_tentative_;
+    if (grid.key_of(lm.x,lm.y)!=old_key) { grid.insert(slot,lm.x,lm.y); }
+  }
+
+  void freeze_map()
+  {
+    // Remove close same-color duplicates once, preserving the oldest ID.
+    for (size_t i=0;i<slots_.size();++i) {
+      if (slots_[i].state!=LmState::CONFIRMED) { slots_[i].state=LmState::DEAD; continue; }
+      for (size_t j=0;j<i;++j) {
+        if (slots_[j].state==LmState::CONFIRMED && slots_[j].best_color()==slots_[i].best_color() &&
+            std::hypot(slots_[i].x-slots_[j].x,slots_[i].y-slots_[j].y)<0.7) {
+          slots_[i].state=LmState::DEAD; --confirmed_count_; break;
+        }
+      }
+    }
+    grid_confirmed_.compact(slots_,LmState::CONFIRMED);
+    grid_tentative_.compact(slots_,LmState::TENTATIVE);
+    frozen_=true;
+    RCLCPP_INFO(get_logger(),"map frozen: %zu persistent cones, %u triangulated; subsequent laps localize only",
+                confirmed_count_,triangulated_cones_);
   }
 
   void publish_map()
@@ -657,6 +739,11 @@ private:
     st.localized_cones =
       static_cast<uint16_t>(std::min<uint32_t>(loc_inliers_, 65535));
     st.localization_rms_m = static_cast<float>(loc_rms_);
+    st.map_frozen=frozen_;
+    st.localization_valid=localization_valid_ && now().seconds()-last_localization_t_<0.5;
+    st.matched_cones=matched_cones_;
+    st.triangulated_cones=triangulated_cones_;
+    st.correspondence_ratio=correspondence_ratio_;
     status_pub_->publish(st);
   }
 
@@ -674,6 +761,12 @@ private:
   size_t loc_min_landmarks_{12};
   double loc_rms_{0.0}, dist_{0.0}, last_odom_t_{-1.0};
   LapCounter laps_;
+  bool frozen_{false}, freeze_after_lap_{true}, triangulation_enable_{true}, localization_valid_{false};
+  bool localize_while_mapping_{false}, fix_heading_{true};
+  double camera_x_{1.0},camera_y_{0.0},max_loc_rms_{0.35},last_localization_t_{-1.0};
+  uint32_t triangulated_cones_{0};
+  uint16_t matched_cones_{0};
+  double correspondence_ratio_{0.0};
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<fsd_msgs::msg::Cone3DArray>::SharedPtr cones_sub_;

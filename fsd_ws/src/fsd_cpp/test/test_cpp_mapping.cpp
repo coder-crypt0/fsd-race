@@ -11,6 +11,7 @@
 #include <random>
 #include <unordered_map>
 #include <vector>
+#include "../include/fsd_cpp/landmark_geometry.hpp"
 
 // The extracted ICP core deliberately uses the production angle helper. Keep
 // the standalone harness dependency-free while exercising identical math.

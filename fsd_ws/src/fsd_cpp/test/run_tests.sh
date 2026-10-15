@@ -18,6 +18,9 @@ g++ $CXXFLAGS -o test_cpp_algo test_cpp_algo.cpp
 g++ $CXXFLAGS -o test_cpp_mapping test_cpp_mapping.cpp
 ./test_cpp_mapping
 
+g++ $CXXFLAGS -o /tmp/fsd_landmark_geometry_test test_landmark_geometry.cpp
+/tmp/fsd_landmark_geometry_test
+
 echo
 echo "--- planning benchmark (informational; 10 Hz budget = 100 ms) ---"
 g++ $CXXFLAGS -o bench_planning bench_planning.cpp

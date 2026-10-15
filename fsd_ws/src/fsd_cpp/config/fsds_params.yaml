@@ -35,7 +35,7 @@ state_estimation:
     # physics-time quantity and cannot be integrated against a slow wall clock.
     use_front_wheels: true
     use_imu_orientation: true
-    use_map_correction: false
+    use_map_correction: true
     max_correction_speed_mps: 1.0    # 0.02 m per 50 Hz tick: no pose jumps
     max_correction_yaw_rate: 0.3
     correction_reject_m: 2.0
@@ -51,14 +51,21 @@ cone_mapping:
     gate_sigma_scale: 3.0
     gate_max_m: 1.5
     publish_rate_hz: 10.0
-    localize_enable: false
+    localize_enable: true
     localize_gate_m: 1.0             # < half the 3 m cone pitch
-    localize_min_inliers: 6
+    localize_min_inliers: 4
     localize_min_obs: 5
     localize_min_landmarks: 12
     min_lap_distance_m: 20.0
     start_corridor_m: 6.0
     laps_to_known: 1                 # one mapped lap unlocks race speed
+    freeze_after_lap: true
+    triangulation_enable: true
+    camera_offset_x: 1.0
+    camera_offset_y: 0.0
+    localize_max_rms_m: 0.35
+    localize_while_mapping: true   # translation only; IMU remains heading reference
+    localize_fix_heading: true
 
 path_planning:
   ros__parameters:
@@ -107,7 +114,7 @@ path_planning:
     # At 10 m/s, a 0.3 s reaction plus braking at 6 m/s^2 needs 11.3 m.
     # Reliable detection distance and braking capability at that speed have
     # not been validated. The supported sensor profile remains monocular.
-    v_race_mps: 10.0
+    v_race_mps: 6.0
 
 motion_control:
   ros__parameters:

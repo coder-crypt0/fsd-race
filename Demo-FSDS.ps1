@@ -83,7 +83,8 @@ New-Item -ItemType Directory -Path $settingsTargetDir -Force | Out-Null
 [IO.File]::WriteAllText($settingsTarget, $runtimeSettings, [Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath $settingsTarget -Destination $binarySettingsTarget -Force
 Start-Process -FilePath $simulatorExe -ArgumentList @(
-    '/Game/TrainingMap?listen', '-WINDOWED', '-ResX=960', '-ResY=540'
+    '/Game/TrainingMap?listen', '-WINDOWED', '-ResX=960', '-ResY=540',
+    '-ExecCmds="sg.ShadowQuality 0,sg.PostProcessQuality 0,sg.EffectsQuality 0,r.MotionBlurQuality 0,t.MaxFPS 30"'
 ) | Out-Null
 Add-StartupPhase 'simulator_spawned'
 

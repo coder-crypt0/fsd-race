@@ -13,3 +13,8 @@ float32 track_length_m     # measured lap length, 0 until loop_closed
 uint16  confirmed_cones
 uint16  localized_cones    # landmarks matched by the last localization solve
 float32 localization_rms_m # map-relative residual, 0 = not localizing
+bool map_frozen            # established landmark coordinates and IDs are immutable
+bool localization_valid    # accepted correspondence fit received within 0.5 seconds
+uint16 matched_cones       # unique, same-color correspondences in the latest frame
+uint32 triangulated_cones  # landmarks refined using successive views of the ONE camera
+float32 correspondence_ratio

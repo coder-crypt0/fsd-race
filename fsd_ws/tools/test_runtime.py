@@ -131,6 +131,13 @@ def main():
             '-p', 'use_front_wheels:=true', '-p', 'use_imu_orientation:=true',
             '-p', 'use_map_correction:=false'], stdout=subprocess.DEVNULL)
         processes.append(estimator)
+        # DDS participant discovery is not a sensor response time. Wait for
+        # the test publishers' readers before starting the timed yaw sequence.
+        discovery_deadline = time.monotonic() + 6.0
+        while imu_pub.get_subscription_count() == 0 or wheel_pub.get_subscription_count() == 0:
+            assert time.monotonic() < discovery_deadline, 'Estimator sensor subscriptions were not discovered'
+            assert estimator.poll() is None, 'Estimator exited before sensor discovery'
+            rclpy.spin_once(node, timeout_sec=0.05)
         start = time.monotonic()
         while time.monotonic() - start < 2.0:
             stamp = node.get_clock().now().to_msg()
@@ -159,6 +166,10 @@ def main():
         encoder_sub = node.create_subscription(WheelSpeeds, '/wheel_speeds', converted.append, 10)
         raw_wheels = node.create_publisher(WheelStates, '/wheel_states', 10)
         adapter = launch('fsds_adapter_node')
+        discovery_deadline = time.monotonic() + 6.0
+        while raw_wheels.get_subscription_count() == 0:
+            assert time.monotonic() < discovery_deadline, 'Adapter wheel subscription was not discovered'
+            rclpy.spin_once(node, timeout_sec=0.05)
         start = time.monotonic()
         while time.monotonic() - start < 2.0:
             elapsed = time.monotonic() - start
@@ -183,6 +194,11 @@ def main():
             '-p', 'ground_camera_height_m:=0.8', '-p', 'min_contour_area_px:=5',
             '-p', 'mask_close_px:=3', '-p', 'min_aspect:=0.55'], stdout=subprocess.DEVNULL)
         processes.append(perception)
+        discovery_deadline = time.monotonic() + 6.0
+        while image_pub.get_subscription_count() == 0:
+            assert time.monotonic() < discovery_deadline, 'Perception image subscription was not discovered'
+            assert perception.poll() is None, 'Perception exited before image discovery'
+            rclpy.spin_once(node, timeout_sec=0.05)
         bridge = CvBridge()
 
         def send_frame(frame):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import rclpy
 from fs_msgs.msg import ExtraInfo, WheelStates
-from fsd_msgs.msg import Cone3DArray, ConeMap, Heartbeat, PathPointArray, TrackStatus, VehicleCmd, VehicleStatus
+from fsd_msgs.msg import Cone3DArray, ConeMap, Heartbeat, PathPointArray, TrackStatus, VehicleCmd, VehicleStatus, SpeedLimit
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from sensor_msgs.msg import Imu, Image
@@ -48,7 +48,7 @@ def main():
 
     def receive(topic, msg):
         elapsed = time.monotonic() - started
-        if args.research:
+        if args.research or topic in ('wheels', 'imu'):
             first_rx.setdefault(topic, elapsed)
             previous = last_rx.get(topic)
             # Per-arrival gaps are bounded by the 900 s maximum evaluation duration.
@@ -78,6 +78,7 @@ def main():
         ('wheels', '/wheel_states', WheelStates),
         ('detections', '/perception/cones', Cone3DArray),
         ('path', '/planning/path', PathPointArray),
+        ('speed_limit', '/planning/speed_limit', SpeedLimit),
         ('map', '/mapping/track', ConeMap),
         ('status', '/mapping/status', TrackStatus),
         ('control', '/control/cmd', VehicleCmd),
@@ -87,8 +88,10 @@ def main():
     ]:
         subscriptions.append(node.create_subscription(
             cls, topic, lambda msg, k=key: receive(k, msg), qos_profile_sensor_data))
+    subscriptions.append(node.create_subscription(
+        Imu, '/imu', lambda msg: receive('imu', msg), qos_profile_sensor_data))
     if args.research:
-        for key, topic, cls in [('imu', '/imu', Imu), ('camera', '/fsds/cam_left/image_color', Image)]:
+        for key, topic, cls in [('camera', '/fsds/cam_left/image_color', Image)]:
             subscriptions.append(node.create_subscription(
                 cls, topic, lambda msg, k=key: receive(k, msg), qos_profile_sensor_data))
         subscriptions.append(node.create_subscription(CallbackTiming, '/diagnostics/callback_timing',
@@ -114,7 +117,7 @@ def main():
                                    'stamp': m.header.stamp.sec + m.header.stamp.nanosec * 1e-9,
                                    'speed': m.twist.twist.linear.x,
                                    'lateral_speed': m.twist.twist.linear.y}
-            for key in ['referee', 'status', 'control', 'wheels', 'vehicle', 'ebs']:
+            for key in ['referee', 'status', 'control', 'wheels', 'vehicle', 'ebs', 'speed_limit']:
                 if key in latest:
                     sample[key] = message_to_ordereddict(latest[key])
             sample['path_points'] = len(latest['path'].points) if 'path' in latest else 0
@@ -130,6 +133,9 @@ def main():
         result = {'duration_s': duration, 'started_unix_s': started_unix, 'received': dict(counts),
                   'rates_hz': {k: v / duration for k, v in counts.items()},
                   'events': events, 'samples': samples}
+        result['sensor_max_arrival_gap_s'] = {
+            k: max((row[1] for row in arrivals.get(k, [])), default=0.0)
+            for k in ('imu', 'wheels')}
         if 'map' in latest:
             result['final_map'] = message_to_ordereddict(latest['map'])
         if args.research:

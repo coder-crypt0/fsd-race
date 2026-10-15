@@ -110,6 +110,7 @@ private:
   struct PathPt
   {
     double x, y, curvature;
+    double target_speed;
   };
 
   void on_path(fsd_msgs::msg::PathPointArray::ConstSharedPtr msg)
@@ -118,14 +119,15 @@ private:
     path_available_ = msg->points.size() >= 2 && msg->header.frame_id == "odom";
     for (const auto & p : msg->points) {
       path_available_ = path_available_ && std::isfinite(p.x) &&
-        std::isfinite(p.y) && std::isfinite(p.curvature);
+        std::isfinite(p.y) && std::isfinite(p.curvature) &&
+        std::isfinite(p.target_speed_mps) && p.target_speed_mps>=0.0;
     }
     if (!path_available_) {
       return;
     }
     path_.clear();
     for (const auto & p : msg->points) {
-      path_.push_back({p.x, p.y, p.curvature});
+      path_.push_back({p.x, p.y, p.curvature, p.target_speed_mps});
     }
     v_profile_ = velocity_profile();
     path_t_ = fsd::stamp_to_sec(msg->header.stamp);
@@ -178,6 +180,7 @@ private:
     std::vector<double> v(n), ds(n - 1);
     for (size_t i = 0; i < n; ++i) {
       v[i] = std::min(v_max_, std::sqrt(a_lat_ / std::max(std::abs(path_[i].curvature), 1e-3)));
+      if (path_[i].target_speed>0.0) { v[i]=std::min(v[i],path_[i].target_speed); }
     }
     for (size_t i = 0; i + 1 < n; ++i) {
       ds[i] = std::hypot(path_[i + 1].x - path_[i].x, path_[i + 1].y - path_[i].y);

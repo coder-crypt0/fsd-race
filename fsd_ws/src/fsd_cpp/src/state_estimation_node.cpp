@@ -61,7 +61,7 @@ public:
           if (std::isfinite(norm) && std::abs(norm - 1.0) < 0.05) {
             const double heading = fsd::yaw_from_quaternion(q);
             if (!initial_imu_yaw_) { initial_imu_yaw_ = heading; }
-            yaw_ = fsd::wrap_angle(heading - *initial_imu_yaw_);
+            yaw_ = fsd::wrap_angle(heading - *initial_imu_yaw_ + imu_heading_offset_);
             orientation_rx_t_ = imu_rx_t_;
           }
         }
@@ -91,7 +91,8 @@ public:
 private:
   void on_correction(PoseCorrection::ConstSharedPtr m)
   {
-    if (!use_corr_ || !m->valid) {
+    if (!use_corr_ || !m->valid || m->n_inliers<4 || !std::isfinite(m->dx+m->dy+m->dyaw+m->rms_m) ||
+        m->rms_m>0.35 || now().seconds()-fsd::stamp_to_sec(m->header.stamp)>0.5) {
       return;
     }
     if (std::hypot(m->dx, m->dy) > corr_reject_) {
@@ -120,6 +121,7 @@ private:
     const double step_w = corr_w_ * dt;
     const double aw = std::clamp(pend_yaw_, -step_w, step_w);
     yaw_ = fsd::wrap_angle(yaw_ + aw);
+    imu_heading_offset_=fsd::wrap_angle(imu_heading_offset_+aw);
     pend_yaw_ -= aw;
   }
 
@@ -185,6 +187,7 @@ private:
   bool use_corr_{true};
   bool use_imu_orientation_{false}, use_front_wheels_{false};
   std::optional<double> initial_imu_yaw_;
+  double imu_heading_offset_{0.0};
   double imu_rx_t_{-1.0}, wheels_rx_t_{-1.0}, orientation_rx_t_{-1.0};
   double x_{0.0}, y_{0.0}, yaw_{0.0}, v_{0.0}, wz_{0.0}, dist_{0.0};
   double dist_since_fix_{0.0};

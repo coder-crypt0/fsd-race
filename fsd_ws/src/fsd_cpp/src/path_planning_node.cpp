@@ -48,6 +48,7 @@
 
 #include "fsd_cpp/common.hpp"
 #include "fsd_cpp/timing.hpp"
+#include "fsd_cpp/speed_profile.hpp"
 
 using fsd_msgs::msg::ConeDetection2D;
 using fsd_msgs::msg::ConeMapEntry;
@@ -155,6 +156,7 @@ std::vector<Tri> delaunay(const std::vector<P2> & pts_in)
 struct Sample
 {
   double x, y, heading, curvature;
+  double target_speed{0.0};
 };
 
 // Uniform Catmull-Rom through the ordered chain, resampled at ~spacing.
@@ -677,7 +679,7 @@ public:
       });
     status_sub_ = create_subscription<TrackStatus>(
       "/mapping/status", fsd::qos_reliable(5),
-      [this](TrackStatus::ConstSharedPtr m) { mode_ = m->mode; });
+      [this](TrackStatus::ConstSharedPtr m) { mode_ = m->mode; track_status_=m; status_rx_t_=now().seconds(); });
     pub_ = create_publisher<PathPointArray>("/planning/path", fsd::qos_reliable(5));
     cap_pub_ = create_publisher<SpeedLimit>("/planning/speed_limit",
                                             fsd::qos_reliable(5));
@@ -881,8 +883,23 @@ private:
     std::vector<Sample> samples, centre;
     std::vector<double> widths;
     bool race_source = false;
-    if (race_enable_ && mode_ == TrackStatus::MODE_KNOWN &&
-        known_window(boundary, samples, centre, widths))
+    // A whole-lap solver must receive the whole persistent map, not the local
+    // 25 m perception window. Only reuse it when fresh correspondences locate
+    // the vehicle on the frozen landmark map.
+    const bool localized=track_status_ && t-status_rx_t_<0.5 &&
+      track_status_->map_frozen && track_status_->localization_valid &&
+      track_status_->matched_cones>=4 && track_status_->correspondence_ratio>=0.4 &&
+      track_status_->localization_rms_m<=0.35;
+    std::vector<ConeMapEntry> global_boundary;
+    if (map_) {
+      for (const auto & c:map_->cones) {
+        if (c.color<=1 && !obstacle_ids_.count(c.id) && c.observation_count>=min_obs_) {
+          global_boundary.push_back(c);
+        }
+      }
+    }
+    if (race_enable_ && localized && mode_ == TrackStatus::MODE_KNOWN &&
+        known_window(global_boundary, samples, centre, widths))
     {
       race_source = true;
     }
@@ -913,6 +930,7 @@ private:
       p.curvature = static_cast<float>(samples[i].curvature);
       const double w = i < widths.size() ? widths[i] : track_w_;
       p.track_width = static_cast<float>(w > 0.0 ? w : track_w_);
+      p.target_speed_mps = static_cast<float>(samples[i].target_speed);
       msg.points.push_back(p);
     }
     return msg;
@@ -1228,7 +1246,7 @@ private:
   // Beam search: expand every surviving branch by one step per round, keep the
   // `beam` cheapest, stop at `max_depth`. Cost per step prefers even spacing
   // and small heading changes, so a smooth chain outranks a longer ragged one.
-  std::vector<int> order_chain(const std::vector<P2> & pts) const
+  std::vector<int> order_chain(const std::vector<P2> & pts, bool whole_lap=false) const
   {
     const int n = static_cast<int>(pts.size());
     if (n == 0) {
@@ -1269,7 +1287,7 @@ private:
     }
     int best_node = frontier[0];
 
-    for (int depth = 1; depth < chain_max_depth_ && !frontier.empty(); ++depth) {
+    for (int depth = 1; depth < (whole_lap ? n : chain_max_depth_) && !frontier.empty(); ++depth) {
       std::vector<int> next;
       for (int ni : frontier) {
         const Node cur = tree[ni];
@@ -1416,7 +1434,7 @@ private:
     if (!midpoints(boundary, kept, kept_w)) {
       return std::nullopt;
     }
-    const auto chain = order_chain(kept);
+    const auto chain = order_chain(kept, true);
     if (chain.size() < 12) {
       return std::nullopt;
     }
@@ -1457,30 +1475,42 @@ private:
     }
     const auto alpha = optimize_raceline(base, normals, bounds, race_iters_,
                                          race_step_, race_reg_);
-    std::vector<P2> shifted;
-    for (size_t i = 0; i < base.size(); ++i) {
-      shifted.push_back({base[i].x + alpha[i] * normals[i].x,
-                         base[i].y + alpha[i] * normals[i].y});
-    }
-    // resample=false keeps the racing line index-aligned with its centerline.
-    std::vector<double> ignored;
-    g.race = periodic_catmull_rom(shifted, spacing_, g.widths, &ignored, false);
-    if (g.race.size() != g.centre.size()) {
-      return std::nullopt;
-    }
-
     std::vector<P2> cones;
     for (const auto & c : boundary) {
       cones.push_back({static_cast<double>(c.x), static_cast<double>(c.y)});
     }
-    // Verify, then trust: if the optimized line does not keep clear of the
-    // cones that bounded it, the width estimate was wrong somewhere.
-    if (min_clearance(g.race, cones) < race_min_clear_) {
-      RCLCPP_WARN(get_logger(), "racing line failed the clearance check — "
-                                "using the centerline for this map");
-      g.race = g.centre;
+    auto timed_profile=[this](const std::vector<Sample> & line) {
+      std::vector<fsd_planning::SpeedPoint> points;
+      for (const auto & p:line) { points.push_back({p.x,p.y,p.curvature}); }
+      return fsd_planning::lap_profile(points,v_race_,6.0,3.0,6.0);
+    };
+    auto best_profile=timed_profile(g.centre);
+    if (!best_profile.valid || min_clearance(g.centre,cones)<race_min_clear_) { return std::nullopt; }
+    const double centre_seconds=best_profile.seconds;
+    g.race=g.centre;
+    // Evaluate a bounded family of curvature-optimized offsets against the
+    // actual lap-time model. A shorter/less-curved line is not always faster.
+    for (double fraction:{0.25,0.5,0.75,1.0}) {
+      std::vector<P2> shifted;
+      for (size_t i=0;i<base.size();++i) {
+        shifted.push_back({base[i].x+fraction*alpha[i]*normals[i].x,
+                           base[i].y+fraction*alpha[i]*normals[i].y});
+      }
+      std::vector<double> ignored;
+      auto candidate=periodic_catmull_rom(shifted,spacing_,g.widths,&ignored,false);
+      if (candidate.size()!=g.centre.size() || min_clearance(candidate,cones)<race_min_clear_) { continue; }
+      bool inside=true;
+      for (size_t i=0;i<candidate.size();++i) {
+        inside=inside && std::hypot(candidate[i].x-base[i].x,candidate[i].y-base[i].y)<=bounds[i]+0.05;
+      }
+      const auto profile=timed_profile(candidate);
+      if (inside && profile.valid && profile.seconds<best_profile.seconds) {
+        g.race=std::move(candidate); best_profile=profile;
+      }
     }
-    g.race = smooth_curvature(g.race, 2, true);
+    for (size_t i=0;i<g.race.size();++i) { g.race[i].target_speed=best_profile.speed[i]; }
+    RCLCPP_INFO(get_logger(),"predicted lap time: centerline %.2f s, selected line %.2f s (model, not measured)",
+                centre_seconds,best_profile.seconds);
     return g;
   }
 
@@ -1659,6 +1689,8 @@ private:
 
   fsd_msgs::msg::ConeMap::ConstSharedPtr map_;
   fsd_msgs::msg::Cone3DArray::ConstSharedPtr local_cones_;
+  TrackStatus::ConstSharedPtr track_status_;
+  double status_rx_t_{-1.0};
   std::vector<LocalCone> local_cache_;
   std::optional<fsd::Pose2D> pose_;
   fsd::PoseBuffer poses_;
