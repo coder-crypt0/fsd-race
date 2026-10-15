@@ -10,19 +10,26 @@ It starts autonomously from a fresh spawn without a preloaded track.
 ## Project status
 
 **Engineering demonstrator — clean laps demonstrated, repeatability not yet achieved.**
-Reviewed **16 September 2026**, against driving implementation `79502e9`.
+Updated **15 October 2026**. Historical clean-lap evidence is from `79502e9`;
+the current persistent-map changes have separate test results below.
 This is not a race-ready or real-vehicle-certified release.
+
+The latest October trial froze 255 landmarks with 173 triangulation refinements,
+but recorded one cone hit, rejected the full-map route, and later stopped on
+stale sensors. Faster clean map-reuse laps are **not yet demonstrated**. The
+latest translation-only learning and rendering configuration changes await a
+rerun. [Current results and exact evidence boundary](docs/research/results.md).
 
 | Capability | Implemented / observed status |
 |---|---|
 | One forward RGB camera | Active; 424 × 320, 70° horizontal FOV |
 | LiDAR / stereo / neural detector | None active; no YOLO weights or inference runtime |
 | Cone perception | HSV masks, geometry rejection, monocular ground-foot ranging |
-| Online mapping | Confirmed landmarks and color-based boundaries; accumulated drift remains |
+| Online mapping | Color-gated landmarks and temporal monocular triangulation; map freezes after inferred first lap |
 | Unseen-track driving | Local corridor planning; two clean FSDS TrainingMap laps recorded |
 | Recovery | Brief corridor loss can stop and resume automatically; EBS stays latched |
 | Obstacle handling | Cone-like objects and blockage logic; general/dynamic objects unvalidated |
-| Known-track racing line | Implemented, experimental; full-speed clean laps not demonstrated |
+| Known-track racing line | Full-map route, unique cone correspondence and periodic lap-time-scored speed profile; live validation remains required |
 | Jetson Orin Nano | Deployment target; hardware build, timing and vehicle tests outstanding |
 
 Three dedicated fresh-spawn lap trials produced **two clean laps: 151.362 s and
@@ -31,8 +38,9 @@ IMU/wheel data before finishing. A later resource-profiling run reproduced that
 stop. These are individual trials, not a statistically established reliability
 rate. See the [validation record](docs/validation.md).
 
-The first-lap limit is **2.5 m/s in the controller's time base**. The 10 m/s
-known-track setting is an unvalidated ceiling, not achieved race performance.
+The first-lap limit is **2.5 m/s in the controller's time base**. The current
+known-track ceiling is **6 m/s**, authorized only with valid correspondence
+and a closed route; it is not a claim of achieved race performance.
 An unknown track cannot be globally optimized before it is observed; the first
 lap uses online, local planning.
 
@@ -63,6 +71,7 @@ External dependencies are not bundled or automatically provisioned.
 .\run.ps1                               # synchronize, build, launch
 .\run-nobuild.ps1                       # reuse the last compiled binaries
 .\run-nobuild.ps1 -EvaluationSeconds 190  # bounded evaluation, then stop
+.\run-nobuild.ps1 -EvaluationSeconds 330 -NoBrowser # mapping and map-reuse trial
 ```
 
 The car starts automatically in **FSDS TrainingMap**. The dashboard opens at
@@ -122,6 +131,8 @@ benchmarks. [Per-process measurements and methods →](docs/performance.md)
 | [Operations](docs/operations.md) | Setup, demo, logs, captures, tests, storage and troubleshooting |
 | [Validation](docs/validation.md) | Successful and failed trials, accuracy definitions, acceptance checks |
 | [Performance](docs/performance.md) | CPU/GPU/RAM measurements and reproducible profiling |
+| [Research dossier](docs/research/README.md) | Technical flowcharts, mathematical models, evolution and measurement protocol |
+| [Persistent mapping](docs/research/persistent-mapping.md) | Temporal triangulation, frozen IDs, correspondence gates and lap-time objective |
 | [Jetson deployment](docs/jetson-deployment.md) | Orin Nano versus original Nano, camera integration, bring-up gates |
 | [Completion roadmap](docs/roadmap.md) | Remaining work and release acceptance criteria |
 | [Workspace guide](fsd_ws/README.md) | Packages, build commands, runtime/reference distinction |
@@ -140,6 +151,7 @@ Built-node regressions after building and sourcing the ROS workspace:
 cd fsd_ws
 source install/setup.bash
 python3 tools/test_runtime.py
+python3 tools/test_map_lifecycle.py
 ```
 
 Evaluate a recorded run; optional reference geometry strengthens the check:

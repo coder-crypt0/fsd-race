@@ -1,6 +1,6 @@
 # Research and implementation dossier
 
-**Monocular FSDS autonomy · 23 September 2026**
+**Monocular FSDS autonomy · updated 15 October 2026**
 
 This dossier explains the implemented solution, why earlier versions failed, what
 the experiments show, and what remains unproven. It is an implementation study,
@@ -21,6 +21,7 @@ geometry/control pipeline, not a trained end-to-end neural model.
 |---|---|
 | [System and runtime](system-and-runtime.md) | Windows, WSL, Docker, ROS, RPC, startup, clocks and observer boundaries |
 | [Algorithms and mathematical models](algorithms.md) | Every driving layer, decisions, equations, assumptions and failure propagation |
+| [Persistent mapping and lap-time planning](persistent-mapping.md) | Temporal triangulation, immutable cone IDs, post-lap correspondence and periodic speed optimization |
 | [Evolution and experiments](evolution.md) | Previous approaches, root causes, changes, controlled versus bundled comparisons |
 | [Measurement protocol](measurement-protocol.md) | Timing definitions, CPU/GPU/RAM conventions, reproducible tests and interpretation |
 | [Measured results](results.md) | New run summaries and links to time-series/distribution figures |

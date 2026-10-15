@@ -12,7 +12,7 @@ in the tested path. “Model” here means:
 | Appearance | HSV color ranges plus contour/shape constraints |
 | Geometry | Pinhole projection and calibrated flat ground |
 | Motion | Planar wheel displacement and IMU heading |
-| Landmarks | Proximity association and scalar uncertainty-weighted updates |
+| Landmarks | Unique color-gated association, temporal bearing triangulation, immutable post-lap map |
 | Track | Colored boundary chains, fallback triangulation and interpolated curves |
 | Speed | Curvature/acceleration/braking constraints |
 | Tracking | Pure Pursuit lateral control and PI longitudinal control |
@@ -166,9 +166,12 @@ range uncertainty. Association searches the spatial grid with a sigma-scaled
 gate clamped between 0.5 and 1.5 m. It is proximity-based, not globally optimal
 data association. Confirmed entries are not removed mid-run.
 
-Map correction is disabled in this profile. Consequently a locally successful
-controller can coexist with a globally drifting map. Map count exceeding the
-196 reference cones is evidence of duplicates/drift, not superior recall.
+The latest experimental profile permits translation-only visual feedback during
+learning; its FSDS rerun is pending. After the first inferred lap the map freezes
+and unique, color-compatible correspondences may correct translation; the FSDS
+IMU remains the heading reference. Map count
+exceeding the 196 reference cones is evidence of duplicates/drift, not superior
+recall. [Triangulation and lifecycle details](persistent-mapping.md).
 
 ## 6. Online first-lap corridor
 
@@ -205,10 +208,12 @@ flowchart TB
     MODE{"Estimated start-region crossing?"}
     MODE -->|"No"| LOCAL["Local online route / 2.5 m/s ceiling"]
     MODE -->|"Yes"| KNOWN["MODE_KNOWN"]
-    KNOWN --> LOOP{"Valid closed corridor?"}
+    KNOWN --> LOC{"Fresh valid cone correspondence?"}
+    LOC -->|"No"| LOCAL
+    LOC -->|"Yes"| LOOP{"Valid closed corridor from full frozen map?"}
     LOOP -->|"No"| LOCAL
     LOOP -->|"Yes"| OPT["Iterative constrained racing-line optimization"]
-    OPT --> WINDOW["Select forward window / nominal 10 m/s ceiling"]
+    OPT --> WINDOW["Model-time candidate selection / 6 m/s ceiling"]
     LOCAL --> OBJ["Check repeated cone-like objects in corridor"]
     WINDOW --> OBJ
     OBJ --> GAP{"Feasible lateral clearance?"}

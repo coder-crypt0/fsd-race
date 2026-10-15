@@ -104,7 +104,7 @@ Rates are requested publication rates unless explicitly described as observed.
 | `/odometry/filtered` | nav_msgs/Odometry | Estimator → mapper/planner/controller/safety/dashboard | 50 Hz; reliable, depth 10 |
 | `/mapping/track` | ConeMap | Mapper → planner/safety/dashboard | 10 Hz; reliable, depth 5 |
 | `/mapping/status` | TrackStatus | Mapper → planner/evaluator | 10 Hz; reliable, depth 5 |
-| `/localization/correction` | PoseCorrection | Optional mapper → estimator | Disabled in profile; reliable |
+| `/localization/correction` | PoseCorrection | Mapper → estimator after map freeze | Gated translation correction; IMU heading locked; reliable |
 | `/planning/path` | PathPointArray | Planner → controller/dashboard | 10 Hz; reliable, depth 5 |
 | `/planning/speed_limit` | SpeedLimit | Planner → controller | 10 Hz; reliable, depth 5 |
 | `/control/cmd` | VehicleCmd | Controller → adapter/safety/dashboard | 50 Hz; reliable, depth 1 |
@@ -125,9 +125,9 @@ channel. Source bridge QoS must be compatible with these subscribers.
 | ConeDetection2D | color, bbox center/size pixels, confidence, source; current source HSV, confidence fixed 0.8 |
 | Cone3D | Per-frame temporary id, color, x/y/z metres, depth_sigma; not a persistent landmark id |
 | ConeMapEntry | Persistent id, voted color, planar odom x/y, side, observation_count |
-| PathPoint | odom x/y, heading, signed curvature, track_width |
+| PathPoint | odom x/y, heading, signed curvature, track_width, target_speed_mps (zero = local computation) |
 | SpeedLimit | v_max_mps and reason: EXPLORE=0, RACE=1, OBSTACLE=2, BLOCKED=3 |
-| TrackStatus | mode EXPLORE=0 / KNOWN=1, inferred laps, crossing flag, lap distance, track length, map/localization counters |
+| TrackStatus | mode EXPLORE=0 / KNOWN=1, inferred laps, crossing flag, distances, counters, map_frozen, localization_valid, matched_cones, triangulated_cones, correspondence_ratio |
 | VehicleCmd | Tire-angle convention +left, torque request, normalized brake [0,1], emergency_stop |
 | VehicleStatus | AS state and feedback fields; FSDS echoes steering command, other hardware fields are not measurements |
 | WheelSpeeds | fl/fr/rl/rr in rad/s; radius conversion belongs to estimator |
@@ -154,7 +154,7 @@ signal is received.
 | Local planner | 25 m ahead / 5 m behind; 0.5 m samples; default width 3.5 m |
 | Local observation cache | Fresh observation window 0.35 s; cache 3 s; merge radius 0.75 m |
 | Racing line | Enabled experimentally; 60 m ahead window; 1 m margin; 400 optimization iterations |
-| Speed ceilings | First lap 2.5 m/s; valid known-track path 10 m/s; controller absolute 12 m/s |
+| Speed ceilings | First lap 2.5 m/s; localized valid known-track path 6 m/s; controller absolute 12 m/s |
 | Controller | Wheelbase 1.55 m; ±0.35 rad; lookahead 0.8 × speed, clamped 2–8 m |
 | Longitudinal | Kp 2.0, Ki 0.8; torque scaling 30 Nm; cap ramp 2 m/s² |
 | Dynamics assumptions | Lateral/braking 6 m/s²; acceleration 3 m/s² |

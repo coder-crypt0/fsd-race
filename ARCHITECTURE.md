@@ -108,9 +108,11 @@ integration when orientation becomes stale. Position integrates in 2D at a
 requested 50 Hz. Covariance grows heuristically with distance.
 This is **dead reckoning, not an EKF or validated visual-inertial SLAM**.
 
-Map pose correction exists but is disabled in mapper and estimator. Global
-position/map drift therefore accumulates. Very low simulated heading error
-cannot be transferred to a physical camera/IMU system.
+The experimental profile permits gated translation-only visual correction
+during learning; that latest setting awaits a simulator rerun. After first-lap
+map freeze, the mapper uses unique same-color correspondences against fixed
+landmarks; simulated IMU orientation remains the heading reference.
+Very low simulated heading error cannot be transferred to physical hardware.
 
 ## 4. Cone mapping and track knowledge
 
@@ -126,8 +128,10 @@ confirmed entries persist for the run. Blue implies LEFT, yellow RIGHT,
 regardless of the cone's observed side relative to the car. Orange/unknown
 landmarks retain side votes.
 
-The map is built in memory. No robust map reload, global bundle adjustment or
-validated relocalization is provided. The two clean recordings ended with 208
+The map is built in memory and frozen after the first inferred lap. Temporal
+monocular bearing triangulation refines learning-stage landmarks; later frames
+localize against stable IDs without remapping. No robust map reload or global
+bundle adjustment is provided. The historical clean recordings ended with 208
 and 248 confirmed entries versus 196 reference cones: duplicate/drift errors
 remain.
 
@@ -163,7 +167,7 @@ positions or beyond the camera's field of view.
 
 After an estimated lap crossing, `MODE_KNOWN` permits a closed corridor and
 constrained iterative racing-line optimization. A valid known-track path can
-request 10 m/s; local fallback remains capped at 2.5 m/s. Curvature and stopping
+request 6 m/s only with fresh correspondence; local fallback remains capped at 2.5 m/s. Curvature and stopping
 distance further constrain the controller.
 
 This is a heuristic geometric racing line, not a proven minimum-time route.
